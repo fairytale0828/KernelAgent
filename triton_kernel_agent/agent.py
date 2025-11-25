@@ -421,7 +421,7 @@ def kernel_function(*args, **kwargs):
         return kernels
 
     def generate_kernel(
-        self, problem_description: str, test_code: Optional[str] = None
+        self, problem_description: str, test_code: Optional[str] = None, level: Optional[int] = None, problem_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
@@ -490,17 +490,20 @@ def kernel_function(*args, **kwargs):
             with open(session_dir / "final_kernel.py", "w") as f:
                 f.write(result["kernel_code"])
 
-            # Save full result
-            with open(session_dir / "result.json", "w") as f:
-                json.dump(result, f, indent=2)
-
-            return {
+            # Save full result with performance data
+            full_result = {
                 "success": True,
                 "kernel_code": result["kernel_code"],
                 "worker_id": result["worker_id"],
                 "rounds": result["rounds"],
                 "session_dir": str(session_dir),
             }
+
+            # Save full result
+            with open(session_dir / "result.json", "w") as f:
+                json.dump(full_result, f, indent=2)
+
+            return full_result
         else:
             self.logger.warning("No worker found a successful solution")
             return {

@@ -233,7 +233,7 @@ class VerificationWorker:
                 cwd=str(self.workdir),
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout
+                timeout=60,  # 60 second timeout
             )
 
             success = result.returncode == 0
@@ -245,7 +245,7 @@ class VerificationWorker:
 
         except subprocess.TimeoutExpired:
             self.logger.error("Test timed out")
-            return False, "", "Test execution timed out after 30 seconds"
+            return False, "", "Test execution timed out after 60 seconds"
         except Exception as e:
             self.logger.error(f"Test execution error: {e}")
             return False, "", str(e)

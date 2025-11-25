@@ -75,6 +75,15 @@ DEBUGGING REQUIREMENTS:
   - Use torch.allclose() with appropriate tolerances for floating point comparisons
 - Include try/except blocks around numerical comparisons to catch and debug assertion errors
 
+PERFORMANCE TESTING REQUIREMENTS:
+- After correctness verification passes, automatically run performance benchmarks
+- Compare Triton kernel performance against PyTorch reference implementation
+- Use proper warmup and multiple runs for accurate timing
+- Report speedup ratio and performance metrics
+- Handle different data types (bfloat16, float32) appropriately
+- Avoid .numpy() calls on bfloat16 tensors (use .float().numpy() if needed)
+- Use torch.cuda.synchronize() for accurate CUDA timing
+
 NUMERICAL TOLERANCE REQUIREMENTS:
 - Use DEFAULT tolerances: rtol=1e-3, atol=1e-3 for torch.allclose()
 - Adjust tolerances ONLY if needed based on:
@@ -89,6 +98,7 @@ IMPORTANT: Do NOT use any Triton kernel launch syntax. Treat kernel_function as 
 The test file structure should be:
 ```python
 import torch
+import time
 # other imports as needed (but NOT triton - that's handled in kernel.py)
 
 # Comment for summary of original problem description
@@ -132,6 +142,21 @@ def test_kernel():
         #     print(f"Relative error: {torch.max(torch.abs((result - expected) / (expected + 1e-8)))}")
         #     return False
         
+        # PERFORMANCE TESTING: Run after correctness verification passes
+        print("=" * 50)
+        print("PERFORMANCE BENCHMARK")
+        print("=" * 50)
+        
+        # Run performance benchmark
+        pytorch_time, triton_time, speedup = run_performance_benchmark(
+            kernel_function, pytorch_reference_function, test_inputs
+        )
+        
+        print(f"PyTorch time: {pytorch_time:.3f}ms")
+        print(f"Triton time:  {triton_time:.3f}ms")
+        print(f"Speedup:      {speedup:.2f}x")      
+        print("=" * 50)
+        
         return True  # if successful
     except Exception as e:
         # Surface undefined helper issues from kernel.py clearly
@@ -141,10 +166,72 @@ def test_kernel():
             print(f"Test failed: {e}")
         return False
 
+def create_pytorch_reference(operation_type, *args):
+    """Create PyTorch reference implementation based on operation type."""
+    # This will be customized based on the specific operation
+    # Examples:
+    # - For ReLU: return torch.relu(args[0])
+    # - For MatMul: return torch.matmul(args[0], args[1])
+    # - For Softmax: return torch.softmax(args[0], dim=-1)
+    pass
+
+def run_performance_benchmark(triton_func, pytorch_func, inputs, warmup_runs=5, benchmark_runs=20):
+    """Run performance benchmark comparing Triton vs PyTorch."""
+    try:
+        # Ensure CUDA synchronization for accurate timing
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
+        # Warmup runs
+        for _ in range(warmup_runs):
+            with torch.no_grad():
+                pytorch_func(*inputs)
+            triton_func(*inputs)
+        
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
+        # Benchmark PyTorch
+        start_time = time.perf_counter()
+        for _ in range(benchmark_runs):
+            with torch.no_grad():
+                pytorch_func(*inputs)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        pytorch_time = (time.perf_counter() - start_time) / benchmark_runs * 1000
+        
+        # Benchmark Triton
+        start_time = time.perf_counter()
+        for _ in range(benchmark_runs):
+            triton_func(*inputs)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        triton_time = (time.perf_counter() - start_time) / benchmark_runs * 1000
+        
+        speedup = pytorch_time / triton_time if triton_time > 0 else 0
+        return pytorch_time, triton_time, speedup
+        
+    except Exception as e:
+        print(f"Performance benchmark failed: {e}")
+        return 0, 0, 0
+
 if __name__ == "__main__":
     import sys
     success = test_kernel()
     sys.exit(0 if success else 1)
 ```
+
+PERFORMANCE BENCHMARK IMPLEMENTATION:
+- Implement create_pytorch_reference() function based on the operation type:
+  * For ReLU: return torch.relu(args[0])
+  * For Sigmoid: return torch.sigmoid(args[0])
+  * For Tanh: return torch.tanh(args[0])
+  * For Softmax: return torch.softmax(args[0], dim=-1)
+  * For MatMul: return torch.matmul(args[0], args[1])
+  * For Add: return torch.add(args[0], args[1])
+  * For other operations: implement appropriate PyTorch equivalent
+- Use the same test inputs for both correctness and performance testing
+- Avoid .numpy() calls on bfloat16 tensors - use tensor operations or .float().numpy()
+- Include proper error handling in performance benchmark
 
 Generate a complete test implementation: 
