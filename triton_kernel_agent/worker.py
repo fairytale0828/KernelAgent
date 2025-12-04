@@ -383,16 +383,19 @@ class VerificationWorker:
 
         current_kernel = kernel_code
 
+        best_success_round = None
+        best_kernel = None
+        
         for round_num in range(self.max_rounds):
-            # Check if another worker has succeeded
-            if success_event.is_set():
-                self.logger.info("Another worker succeeded, stopping")
-                return {
-                    "worker_id": self.worker_id,
-                    "success": False,
-                    "stopped_early": True,
-                    "rounds": round_num,
-                }
+            # Don't stop early - complete all rounds regardless of other workers
+            # if success_event.is_set():
+            #     self.logger.info("Another worker succeeded, stopping")
+            #     return {
+            #         "worker_id": self.worker_id,
+            #         "success": False,
+            #         "stopped_early": True,
+            #         "rounds": round_num,
+            #     }
 
             self.logger.info(f"Round {round_num + 1}/{self.max_rounds}")
 
@@ -429,13 +432,10 @@ class VerificationWorker:
                 self.logger.info(
                     f"Success! Kernel passed test in round {round_num + 1}"
                 )
-                return {
-                    "worker_id": self.worker_id,
-                    "success": True,
-                    "kernel_code": current_kernel,
-                    "rounds": round_num + 1,
-                    "history": list(self.history),
-                }
+                # Record this success but continue iterating
+                best_success_round = round_num + 1
+                best_kernel = current_kernel
+                # Don't return early - continue to explore more rounds
 
             # Refine kernel for next round
             error_info = {
@@ -448,12 +448,25 @@ class VerificationWorker:
                 current_kernel, error_info, problem_description, test_code
             )
 
-        # Max rounds reached without success
-        self.logger.warning(f"Max rounds ({self.max_rounds}) reached without success")
-        return {
-            "worker_id": self.worker_id,
-            "success": False,
-            "max_rounds_reached": True,
-            "rounds": self.max_rounds,
-            "history": list(self.history),
-        }
+        # All rounds completed - return best result
+        if best_success_round is not None:
+            self.logger.info(
+                f"Completed all {self.max_rounds} rounds. Best success at round {best_success_round}"
+            )
+            return {
+                "worker_id": self.worker_id,
+                "success": True,
+                "kernel_code": best_kernel,
+                "rounds": best_success_round,
+                "total_rounds_completed": self.max_rounds,
+                "history": list(self.history),
+            }
+        else:
+            self.logger.warning(f"Completed all {self.max_rounds} rounds without success")
+            return {
+                "worker_id": self.worker_id,
+                "success": False,
+                "max_rounds_reached": True,
+                "rounds": self.max_rounds,
+                "history": list(self.history),
+            }

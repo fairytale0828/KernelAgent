@@ -84,12 +84,22 @@ class EventAdapter:
             except Exception:
                 pass
         
-        # Fallback to OpenAI SDK
+        # Fallback to OpenAI SDK with proper configuration
         if OpenAI is None:
             raise RuntimeError(
                 "OpenAI SDK not available. Install openai>=1.40 and set OPENAI_API_KEY."
             )
-        self._client = OpenAI()
+        
+        # Try to configure OpenAI client with DeepSeek API if available
+        import os
+        deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+        if deepseek_key:
+            self._client = OpenAI(
+                api_key=deepseek_key,
+                base_url="https://api.deepseek.com"
+            )
+        else:
+            self._client = OpenAI()
         return self._client
 
     def _append_event(self, ev: StreamDelta) -> None:

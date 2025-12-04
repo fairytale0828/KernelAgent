@@ -177,22 +177,23 @@ class Worker:
 
             if rr.passed:
                 self.logger.info("PASS at iter %d via %s", k, rr.validator_used)
-                try:
-                    self.winner_queue.put(
-                        {
-                            "worker_id": self.cfg.worker_id,
-                            "iter": k,
-                            "validator": rr.validator_used,
-                            "runs_dir": str(run_root),
-                            "artifacts_dir": str(self.dirs["artifacts"]),
-                        },
-                        timeout=0.1,
-                    )
-                except queue.Full:
-                    pass
+                # Record this successful iteration but don't report as winner yet
+                # Save the successful result for this iteration
+                success_record = {
+                    "worker_id": self.cfg.worker_id,
+                    "iter": k,
+                    "validator": rr.validator_used,
+                    "runs_dir": str(run_root),
+                    "artifacts_dir": str(self.dirs["artifacts"]),
+                }
+                success_file = self.cfg.workspace_dir / f"success_iter_{k}.json"
+                _write_json(success_file, success_record)
+                
                 state.passed = True
                 _write_json(self.cfg.workspace_dir / "state.json", asdict(state))
-                return
+                # Continue iterating instead of returning immediately
+                state.last_error = None  # Clear error since we passed
+                continue
 
             # Build ERROR_CONTEXT and continue
             out_tail = _tail_text(rr.stdout_path)
@@ -200,5 +201,24 @@ class Worker:
             state.last_error = f"RUN_FAIL: {rr.reason}\nSTDOUT_TAIL:\n{out_tail}\nSTDERR_TAIL:\n{err_tail}"
             _write_json(self.cfg.workspace_dir / "state.json", asdict(state))
 
-        # Done all iterations
-        self.logger.info("exhausted max_iters without PASS")
+        # Done all iterations - now report the best result if any
+        self.logger.info("completed all %d iterations", self.cfg.max_iters)
+        
+        # Find all successful iterations
+        success_files = sorted(self.cfg.workspace_dir.glob("success_iter_*.json"))
+        if success_files:
+            # Report the last successful iteration as the winner
+            last_success = success_files[-1]
+            try:
+                import json
+                with last_success.open("r") as f:
+                    winner_data = json.load(f)
+                self.logger.info("Reporting final result from iter %d", winner_data["iter"])
+                try:
+                    self.winner_queue.put(winner_data, timeout=0.1)
+                except queue.Full:
+                    pass
+            except Exception as e:
+                self.logger.error("Failed to report final result: %s", e)
+        else:
+            self.logger.info("No successful iterations found")

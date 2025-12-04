@@ -248,46 +248,59 @@ class Orchestrator:
 
             self._start_console_mux(delta_queues)
 
-            winner: dict[str, Any] | None = None
+            winners: list[dict[str, Any]] = []
             canceled_by_signal = False
+            
+            # Wait for all workers to complete instead of stopping at first success
             while True:
                 if self.cancel_event.is_set():
                     canceled_by_signal = True
                     break
                 try:
                     winner = self.winner_queue.get(timeout=0.1)
-                    break
+                    winners.append(winner)
+                    self.logger.info("Worker %s completed: %s", winner.get("worker_id"), winner)
+                    # Don't break - continue collecting results from other workers
                 except Empty:
-                    # If all workers exited and no winner, treat as no-pass
+                    # If all workers exited, we're done
                     if all(not p.is_alive() for p in procs):
                         break
-            # Winner found or canceled
+            
+            # Select the best winner (last one reported, or first if you prefer)
+            winner: dict[str, Any] | None = winners[-1] if winners else None
+            
             if winner is not None:
                 # expose winner id for console mux in 'winner' mode
                 try:
                     self._winner_id = winner["worker_id"]
                 except Exception:
                     self._winner_id = None
-                self.cancel_event.set()
-                self.logger.info("winner: %s", winner)
-            # Stop console mux soon after cancel
+                self.logger.info("Selected winner: %s (from %d total completions)", winner, len(winners))
+            
+            # Stop console mux after all workers complete
             self._stop_console_mux()
 
-            # Terminate other workers
+            # Wait for all workers to finish gracefully (they should already be done)
             for p in procs:
-                if p.is_alive():
-                    p.terminate()
-            for p in procs:
-                try:
-                    p.join(timeout=5.0)
-                except Exception:
-                    pass
                 if p.is_alive():
                     try:
-                        p.kill()
+                        p.join(timeout=10.0)  # Give more time for graceful completion
                     except Exception:
                         pass
-                    p.join(timeout=1.0)
+                    # Only force terminate if still alive after timeout
+                    if p.is_alive():
+                        self.logger.warning("Worker %s did not finish gracefully, terminating", p.name)
+                        try:
+                            p.terminate()
+                            p.join(timeout=2.0)
+                        except Exception:
+                            pass
+                        if p.is_alive():
+                            try:
+                                p.kill()
+                            except Exception:
+                                pass
+                            p.join(timeout=1.0)
 
             reason = (
                 "canceled"

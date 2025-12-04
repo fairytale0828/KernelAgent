@@ -167,39 +167,58 @@ class WorkerManager:
                 self.workers.append(process)
                 self.logger.info(f"Started worker {i}")
 
-            # Wait for any worker to succeed or all to finish
-            successful_result = None
+            # Wait for ALL workers to complete (don't stop early)
+            all_results = []
 
             while any(w.is_alive() for w in self.workers):
                 try:
                     # Check for results with timeout
                     result = self.result_queue.get(timeout=1.0)
+                    all_results.append(result)
                     if result["success"]:
-                        successful_result = result
-                        self.logger.info(f"Worker {result['worker_id']} succeeded!")
-                        # Signal all workers to stop
-                        self.success_event.set()
-                        break
+                        self.logger.info(f"Worker {result['worker_id']} succeeded in round {result.get('rounds')}!")
+                        # Don't signal workers to stop - let them all complete
+                        # self.success_event.set()
+                    else:
+                        self.logger.info(f"Worker {result['worker_id']} completed without success")
                 except queue.Empty:
                     continue
 
-            # Wait for all workers to finish
+            # Wait for all workers to finish gracefully
             for worker in self.workers:
-                worker.join(timeout=5.0)
+                worker.join(timeout=10.0)
                 if worker.is_alive():
-                    self.logger.warning(f"Terminating worker {worker.pid}")
+                    self.logger.warning(f"Worker {worker.pid} did not finish, terminating")
                     worker.terminate()
+                    worker.join(timeout=2.0)
 
             # Collect any remaining results
             while not self.result_queue.empty():
                 try:
                     result = self.result_queue.get_nowait()
-                    if result["success"] and successful_result is None:
-                        successful_result = result
+                    all_results.append(result)
                 except queue.Empty:
                     break
 
-            return successful_result
+            # Select the best result (prefer successful ones, then by rounds completed)
+            successful_results = [r for r in all_results if r.get("success")]
+            
+            if successful_results:
+                # Return the result with most rounds completed (most refined)
+                best_result = max(successful_results, key=lambda r: r.get("total_rounds_completed", r.get("rounds", 0)))
+                self.logger.info(
+                    f"Selected best result from worker {best_result['worker_id']} "
+                    f"(completed {best_result.get('total_rounds_completed', best_result.get('rounds'))} rounds)"
+                )
+                return best_result
+            elif all_results:
+                # No successful results, return the one that got furthest
+                best_result = max(all_results, key=lambda r: r.get("rounds", 0))
+                self.logger.warning(f"No successful results, returning best attempt from worker {best_result['worker_id']}")
+                return best_result
+            else:
+                self.logger.error("No results collected from any worker")
+                return None
 
     def cleanup(self):
         """Clean up resources."""
