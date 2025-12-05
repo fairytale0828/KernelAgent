@@ -553,6 +553,53 @@ class VerificationWorker:
             self.logger.info(
                 f"Completed all {self.max_rounds} rounds. Best success at round {best_success_round}"
             )
+            
+            # 提取性能数据（从测试输出或NCU结果）
+            speedup = 0.0  # 默认值（未找到性能数据）
+            round_log_file = self.log_dir / f"round_{best_success_round}.json"
+            if round_log_file.exists():
+                try:
+                    with open(round_log_file, "r", encoding="utf-8") as f:
+                        round_data = json.load(f)
+                    
+                    # 检查该轮是否真的成功
+                    round_success = round_data.get("success", False)
+                    if not round_success:
+                        self.logger.warning(f"Round {best_success_round} marked as success but log shows failure")
+                        speedup = 0.0
+                    else:
+                        # 优先从stdout中提取speedup（测试代码输出）
+                        stdout = round_data.get("stdout", "")
+                        speedup_match = re.search(r"Speedup:\s+([\d.]+)x", stdout)
+                        if speedup_match:
+                            speedup = float(speedup_match.group(1))
+                            self.logger.info(f"Extracted speedup from test output: {speedup:.2f}x")
+                        
+                        # 如果stdout中没有，尝试从NCU profiling结果中提取
+                        elif self.enable_ncu_profiling and "ncu_profiling" in round_data:
+                            ncu_data = round_data["ncu_profiling"]
+                            # 从basic_performance中提取
+                            if "bottlenecks" in ncu_data and "basic_performance" in ncu_data["bottlenecks"]:
+                                basic_perf = ncu_data["bottlenecks"]["basic_performance"]
+                                pytorch_time = basic_perf.get("pytorch_time_ms", 0)
+                                triton_time = basic_perf.get("triton_time_ms", 0)
+                                if pytorch_time > 0 and triton_time > 0:
+                                    speedup = pytorch_time / triton_time
+                                    self.logger.info(f"Calculated speedup from NCU data: {speedup:.2f}x")
+                            # 或者直接从speedup字段
+                            elif "speedup" in ncu_data:
+                                speedup = ncu_data["speedup"]
+                                self.logger.info(f"Extracted speedup from NCU data: {speedup:.2f}x")
+                        
+                        # 如果还是没有找到speedup，但测试成功了，给一个保守的默认值
+                        if speedup == 0.0:
+                            speedup = 1.0  # 假设与PyTorch性能相当
+                            self.logger.warning(f"No speedup data found for successful test, using default: {speedup:.2f}x")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to extract speedup: {e}")
+                    speedup = 0.0
+            
             return {
                 "worker_id": self.worker_id,
                 "success": True,
@@ -560,6 +607,7 @@ class VerificationWorker:
                 "rounds": best_success_round,
                 "total_rounds_completed": self.max_rounds,
                 "history": list(self.history),
+                "speedup": speedup,
             }
         else:
             self.logger.warning(
@@ -570,4 +618,5 @@ class VerificationWorker:
                 "max_rounds_reached": True,
                 "rounds": self.max_rounds,
                 "history": list(self.history),
+                "speedup": 0.0,
             }

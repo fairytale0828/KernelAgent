@@ -112,12 +112,13 @@ __pycache__/
 # # Cython debug symbols
 # cython_debug/
 
-# # KernelFalcon specific
-# triton_kernel_logs/
-# *.log
-# session_*/
-# worker_*/
-# .fuse/
+# KernelFalcon specific
+triton_kernel_logs/
+kernel_outputs/
+*.log
+session_*/
+worker_*/
+.fuse/
 
 # # Generated kernels
 # kernel.py

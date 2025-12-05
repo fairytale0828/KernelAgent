@@ -115,6 +115,7 @@ class WorkerManager:
         test_code: str,
         problem_description: str,
         session_log_dir: Optional[Path] = None,
+        strategy_ids: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Run parallel verification on multiple kernel seeds.
@@ -124,6 +125,7 @@ class WorkerManager:
             test_code: Test code to verify kernel correctness
             problem_description: Description of the problem
             session_log_dir: Optional session directory for worker logs
+            strategy_ids: List of strategy IDs corresponding to each kernel seed
 
         Returns:
             Dictionary with successful kernel and metadata, or None
@@ -151,6 +153,9 @@ class WorkerManager:
                 worker_log_dir = workers_parent_dir / f"worker_{i}"
                 worker_log_dir.mkdir(exist_ok=True)
 
+                # 获取对应的策略ID
+                strategy_id = strategy_ids[i] if strategy_ids and i < len(strategy_ids) else None
+
                 args = (
                     i,
                     kernel,
@@ -166,12 +171,13 @@ class WorkerManager:
                     self.openai_model,
                     self.high_reasoning_effort,
                     self.enable_ncu_profiling,  # 改为ncu
+                    strategy_id,  # 传递策略ID
                 )
 
                 process = mp.Process(target=worker_process, args=args)
                 process.start()
                 self.workers.append(process)
-                self.logger.info(f"Started worker {i}")
+                self.logger.info(f"Started worker {i} with strategy {strategy_id}")
 
             # Wait for ALL workers to complete (don't stop early)
             all_results = []
@@ -220,6 +226,8 @@ class WorkerManager:
                     f"Selected best result from worker {best_result['worker_id']} "
                     f"(completed {best_result.get('total_rounds_completed', best_result.get('rounds'))} rounds)"
                 )
+                # 将所有结果附加到最佳结果中
+                best_result["all_results"] = all_results
                 return best_result
             elif all_results:
                 # No successful results, return the one that got furthest
@@ -227,6 +235,8 @@ class WorkerManager:
                     all_results, key=lambda r: r.get("rounds", 0))
                 self.logger.warning(
                     f"No successful results, returning best attempt from worker {best_result['worker_id']}")
+                # 将所有结果附加到最佳结果中
+                best_result["all_results"] = all_results
                 return best_result
             else:
                 self.logger.error("No results collected from any worker")
@@ -255,6 +265,7 @@ def worker_process(
     openai_model: str,
     high_reasoning_effort: bool,
     enable_ncu_profiling: bool = True,  # 改为ncu
+    strategy_id: Optional[str] = None,
 ):
     """
     Worker process for kernel verification and refinement.
@@ -282,5 +293,9 @@ def worker_process(
         problem_description=problem_description,
         success_event=success_event,
     )
+
+    # 添加策略ID到结果中
+    if strategy_id:
+        result["strategy_id"] = strategy_id
 
     result_queue.put(result)

@@ -25,6 +25,9 @@ from dotenv import load_dotenv
 
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
+from .op_classifier import OpClassifier, OpType
+from .strategy_manager import StrategyManager
+from .strategy_scorer import StrategyScorer
 from utils.providers import get_model_provider
 
 
@@ -84,6 +87,11 @@ class TritonKernelAgent:
 
         # Initialize prompt manager
         self.prompt_manager = PromptManager()
+
+        # Initialize strategy components
+        self.op_classifier = OpClassifier(provider=self.provider, model_name=self.model_name)
+        self.strategy_manager = StrategyManager()
+        self.strategy_scorer = StrategyScorer(score_file=self.log_dir / "strategy_scores.json")
 
         # Initialize worker manager
         self.manager = WorkerManager(
@@ -304,7 +312,12 @@ if __name__ == "__main__":
         return test_code
 
     def _generate_kernel_seeds(
-        self, problem_description: str, test_code: str, num_seeds: Optional[int] = None
+        self, 
+        problem_description: str, 
+        test_code: str, 
+        num_seeds: Optional[int] = None,
+        op_type: Optional[OpType] = None,
+        pytorch_code: Optional[str] = None
     ) -> List[str]:
         """
         Generate initial kernel implementations using OpenAI API.
@@ -313,12 +326,27 @@ if __name__ == "__main__":
             problem_description: Description of the kernel to generate
             test_code: Test code that the kernel must pass
             num_seeds: Number of kernel variations to generate
+            op_type: Operator type (if known)
+            pytorch_code: PyTorch reference code (optional)
 
         Returns:
             List of kernel implementation strings
         """
         if num_seeds is None:
             num_seeds = self.num_workers
+
+        # 识别算子类别
+        if op_type is None:
+            op_type = self.op_classifier.classify_operator(problem_description, pytorch_code)
+            self.logger.info(f"Classified operator as: {op_type.value}")
+
+        # 获取推荐的优化策略
+        recommended_strategies = self.strategy_scorer.get_top_strategies(
+            op_type, 
+            top_k=num_seeds,
+            exploration_rate=0.2
+        )
+        self.logger.info(f"Recommended strategies: {recommended_strategies}")
 
         # Use LLM provider if available
         if self.provider:
@@ -327,52 +355,44 @@ if __name__ == "__main__":
                     f"Generating {num_seeds} kernel seeds using {self.model_name}"
                 )
 
-                # Create prompt with Triton guidelines using template
-                prompt = self.prompt_manager.render_kernel_generation_prompt(
-                    problem_description=problem_description, test_code=test_code
-                )
-
                 kernels = []
-                messages = [{"role": "user", "content": prompt}]
-
-                # Use provider's multiple response capability
                 max_completion_tokens = 20000
 
-                if self.provider.supports_multiple_completions():
-                    # Provider supports native multiple completions
-                    responses = self.provider.get_multiple_responses(
-                        self.model_name,
-                        messages,
-                        n=num_seeds,
-                        temperature=0.8,
-                        max_tokens=max_completion_tokens,
-                        high_reasoning_effort=self.high_reasoning_effort,
+                # 为每个推荐策略生成一个kernel seed
+                for i, strategy_id in enumerate(recommended_strategies):
+                    strategy = self.strategy_manager.get_strategy(strategy_id)
+                    if not strategy:
+                        self.logger.warning(f"Strategy {strategy_id} not found")
+                        continue
+
+                    # 创建包含策略指导的prompt
+                    strategy_guidelines = self.strategy_manager.get_strategy_guidelines(strategy_id)
+                    prompt = self.prompt_manager.render_kernel_generation_prompt(
+                        problem_description=problem_description, 
+                        test_code=test_code
                     )
+                    
+                    # 添加策略指导
+                    prompt += f"\n\n优化策略指导 ({strategy.name}):\n{strategy_guidelines}\n"
+                    prompt += "\n请根据上述优化策略生成Triton kernel实现。\n"
 
-                    for i, response in enumerate(responses):
-                        kernel_code = self._extract_code_from_response(response.content)
-                        if kernel_code:
-                            kernels.append(kernel_code)
-                        else:
-                            self.logger.warning(
-                                f"Failed to extract code from kernel seed {i}"
-                            )
-                else:
-                    # Provider doesn't support multiple completions, make individual calls
-                    for i in range(num_seeds):
-                        response_text = self._call_llm(
-                            messages,
-                            max_tokens=max_completion_tokens,
-                            temperature=0.8 + (i * 0.1),
+                    messages = [{"role": "user", "content": prompt}]
+
+                    # 生成kernel
+                    response_text = self._call_llm(
+                        messages,
+                        max_tokens=max_completion_tokens,
+                        temperature=0.7 + (i * 0.1),
+                    )
+                    kernel_code = self._extract_code_from_response(response_text)
+
+                    if kernel_code:
+                        kernels.append(kernel_code)
+                        self.logger.info(f"Generated kernel seed {i} with strategy {strategy_id}")
+                    else:
+                        self.logger.warning(
+                            f"Failed to extract code from kernel seed {i} (strategy: {strategy_id})"
                         )
-                        kernel_code = self._extract_code_from_response(response_text)
-
-                        if kernel_code:
-                            kernels.append(kernel_code)
-                        else:
-                            self.logger.warning(
-                                f"Failed to extract code from kernel seed {i}"
-                            )
 
                 if kernels:
                     self.logger.info(
@@ -421,7 +441,12 @@ def kernel_function(*args, **kwargs):
         return kernels
 
     def generate_kernel(
-        self, problem_description: str, test_code: Optional[str] = None, level: Optional[int] = None, problem_id: Optional[int] = None
+        self, 
+        problem_description: str, 
+        test_code: Optional[str] = None, 
+        level: Optional[int] = None, 
+        problem_id: Optional[int] = None,
+        pytorch_code: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
@@ -433,6 +458,9 @@ def kernel_function(*args, **kwargs):
                       1. Import the kernel function: from kernel import kernel_function
                       2. Test the kernel and return True/False
                       3. Exit with code 0 on success, 1 on failure
+            level: Problem difficulty level (optional)
+            problem_id: Problem ID (optional)
+            pytorch_code: PyTorch reference implementation (optional)
 
         Returns:
             Dictionary with results including successful kernel
@@ -440,6 +468,10 @@ def kernel_function(*args, **kwargs):
         self.logger.info("=" * 60)
         self.logger.info("Starting kernel generation")
         self.logger.info(f"Problem: {problem_description[:100]}...")
+
+        # 识别算子类别
+        op_type = self.op_classifier.classify_operator(problem_description, pytorch_code)
+        self.logger.info(f"Operator type: {op_type.value}")
 
         # Always generate test code using LLM (even if test is provided as reference)
         generated_test_code = self._generate_test(problem_description, test_code)
@@ -465,14 +497,34 @@ def kernel_function(*args, **kwargs):
             f.write(problem_description)
         with open(session_dir / "test.py", "w") as f:
             f.write(test_code)
+        with open(session_dir / "op_type.txt", "w") as f:
+            f.write(op_type.value)
 
-        # Generate kernel seeds
-        kernel_seeds = self._generate_kernel_seeds(problem_description, test_code)
+        # 获取推荐策略
+        recommended_strategies = self.strategy_scorer.get_top_strategies(
+            op_type, 
+            top_k=self.num_workers,
+            exploration_rate=0.2
+        )
 
-        # Save seeds
+        # Generate kernel seeds with strategy guidance
+        kernel_seeds = self._generate_kernel_seeds(
+            problem_description, 
+            test_code, 
+            op_type=op_type,
+            pytorch_code=pytorch_code
+        )
+
+        # Save seeds and strategy info
         for i, kernel in enumerate(kernel_seeds):
             with open(session_dir / f"seed_{i}.py", "w") as f:
                 f.write(kernel)
+        
+        # Save strategy mapping
+        strategy_mapping = {f"worker_{i}": recommended_strategies[i] 
+                          for i in range(len(recommended_strategies))}
+        with open(session_dir / "strategy_mapping.json", "w") as f:
+            json.dump(strategy_mapping, f, indent=2)
 
         # Run parallel verification with session directory for worker logs
         result = self.manager.run_verification(
@@ -480,11 +532,42 @@ def kernel_function(*args, **kwargs):
             test_code=test_code,
             problem_description=problem_description,
             session_log_dir=session_dir,
+            strategy_ids=recommended_strategies,
         )
 
-        # Process results
+        # Process results and update strategy scores
+        # 更新所有worker的策略得分（不仅仅是最佳结果）
+        all_results = result.get("all_results", [result] if result else [])
+        for worker_result in all_results:
+            strategy_id = worker_result.get("strategy_id")
+            if strategy_id:
+                success = worker_result.get("success", False)
+                speedup = worker_result.get("speedup", 1.0 if success else 0.0)
+                
+                self.strategy_scorer.update_score(
+                    op_type=op_type,
+                    strategy_id=strategy_id,
+                    speedup=speedup,
+                    success=success
+                )
+                
+                status = "succeeded" if success else "failed"
+                self.logger.info(
+                    f"Updated score for strategy {strategy_id} (worker {worker_result.get('worker_id')}): "
+                    f"{status}, speedup={speedup:.2f}"
+                )
+        
         if result and result["success"]:
             self.logger.info(f"Success! Worker {result['worker_id']} found solution")
+
+            # 记录最佳结果的策略
+            strategy_id = result.get("strategy_id")
+            speedup = result.get("speedup", 1.0)
+            if strategy_id:
+                self.logger.info(
+                    f"Best result from strategy {strategy_id}: "
+                    f"op_type={op_type.value}, speedup={speedup:.2f}"
+                )
 
             # Save successful kernel
             with open(session_dir / "final_kernel.py", "w") as f:
@@ -497,6 +580,9 @@ def kernel_function(*args, **kwargs):
                 "worker_id": result["worker_id"],
                 "rounds": result["rounds"],
                 "session_dir": str(session_dir),
+                "op_type": op_type.value,
+                "strategy_id": strategy_id,
+                "speedup": speedup,
             }
 
             # Save full result
@@ -506,10 +592,23 @@ def kernel_function(*args, **kwargs):
             return full_result
         else:
             self.logger.warning("No worker found a successful solution")
+            
+            # 对失败的策略给予负反馈
+            if result and "strategy_id" in result:
+                strategy_id = result["strategy_id"]
+                self.strategy_scorer.update_score(
+                    op_type=op_type,
+                    strategy_id=strategy_id,
+                    speedup=0.0,
+                    success=False
+                )
+                self.logger.info(f"Updated score for failed strategy {strategy_id}")
+            
             return {
                 "success": False,
                 "message": "Failed to generate working kernel",
                 "session_dir": str(session_dir),
+                "op_type": op_type.value,
             }
 
     def cleanup(self):
