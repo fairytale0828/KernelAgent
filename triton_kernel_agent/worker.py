@@ -82,7 +82,7 @@ class VerificationWorker:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
-        enable_nsys_profiling: bool = True,  # 新增参数
+        enable_ncu_profiling: bool = True,  # 改为ncu
     ):
         """
         Initialize a verification worker.
@@ -126,17 +126,20 @@ class VerificationWorker:
         # Initialize prompt manager
         self.prompt_manager = PromptManager()
 
-        # 初始化nsys profiler（如果启用）
-        self.enable_nsys_profiling = enable_nsys_profiling
-        self.nsys_profiler = None
-        if self.enable_nsys_profiling:
+        # 初始化ncu profiler（如果启用）
+        self.enable_ncu_profiling = enable_ncu_profiling
+        self.ncu_profiler = None
+        if self.enable_ncu_profiling:
             try:
-                from utils.nsys_profiler import NsysProfiler
-                self.nsys_profiler = NsysProfiler()
-                self.logger.info("Nsys profiling enabled")
+                from utils.ncu_profiler import NcuProfiler
+                self.ncu_profiler = NcuProfiler()
+                if self.ncu_profiler.available:
+                    self.logger.info("NCU profiling enabled")
+                else:
+                    self.logger.info("NCU profiling disabled (ncu not found)")
             except (ImportError, RuntimeError) as e:
-                self.logger.warning(f"Failed to initialize nsys profiler: {e}")
-                self.enable_nsys_profiling = False
+                self.logger.warning(f"Failed to initialize ncu profiler: {e}")
+                self.enable_ncu_profiling = False
 
     def _setup_logging(self):
         """Setup worker-specific logging."""
@@ -358,11 +361,11 @@ class VerificationWorker:
 
         return kernel_code
 
-    def _run_nsys_profiling(
+    def _run_ncu_profiling(  # 重命名方法
         self, round_num: int, kernel_code: str
     ) -> Optional[Dict[str, Any]]:
         """
-        运行nsys性能分析
+        运行NCU性能分析
 
         Args:
             round_num: 当前轮次
@@ -371,36 +374,39 @@ class VerificationWorker:
         Returns:
             profiling结果，失败返回None
         """
-        if not self.enable_nsys_profiling or not self.nsys_profiler:
+        if not self.enable_ncu_profiling or not self.ncu_profiler or not self.ncu_profiler.available:
             return None
 
         try:
-            self.logger.info(
-                f"Running nsys profiling for round {round_num}...")
+            self.logger.info(f"Running NCU profiling for round {round_num}...")
 
             # 确保kernel文件是最新的
             self._write_kernel(kernel_code)
 
             # 运行profiling
-            profile_result = self.nsys_profiler.profile_kernel(
+            profile_result = self.ncu_profiler.profile_kernel(
                 test_file=self.test_file,
                 workdir=self.workdir,
                 output_dir=self.log_dir,
                 round_num=round_num,
                 warmup_runs=3,
-                profile_runs=10,
+                profile_runs=1,  # NCU通常只分析一次
             )
 
             if profile_result:
+                bottleneck_count = len(
+                    profile_result.get("bottlenecks", {}).get(
+                        "bottleneck_summary", [])
+                )
                 self.logger.info(
-                    f"Nsys profiling completed for round {round_num}. "
-                    f"Bottlenecks: {len(profile_result.get('bottlenecks', {}).get('bottleneck_summary', []))} issues found"
+                    f"NCU profiling completed for round {round_num}. "
+                    f"Found {bottleneck_count} potential bottleneck(s)"
                 )
 
             return profile_result
 
         except Exception as e:
-            self.logger.error(f"Nsys profiling failed: {e}")
+            self.logger.error(f"NCU profiling failed: {e}")
             return None
 
     def _log_round(
@@ -494,23 +500,24 @@ class VerificationWorker:
             self._log_round(round_num + 1, success,
                             current_kernel, stdout, stderr)
 
-            # 如果验证成功，运行nsys profiling
-            nsys_result = None
-            if success and self.enable_nsys_profiling:
-                nsys_result = self._run_nsys_profiling(
+            # 如果验证成功，运行ncu profiling
+            ncu_result = None
+            if success and self.enable_ncu_profiling:
+                ncu_result = self._run_ncu_profiling(
                     round_num + 1, current_kernel
                 )
 
-                # 保存nsys结果到round日志
-                if nsys_result:
+                # 保存ncu结果到round日志
+                if ncu_result:
                     round_log_file = self.log_dir / \
                         f"round_{round_num + 1}.json"
                     if round_log_file.exists():
-                        with open(round_log_file, "r") as f:
+                        with open(round_log_file, "r", encoding="utf-8") as f:
                             round_data = json.load(f)
-                        round_data["nsys_profiling"] = nsys_result
-                        with open(round_log_file, "w") as f:
-                            json.dump(round_data, f, indent=2)
+                        round_data["ncu_profiling"] = ncu_result
+                        with open(round_log_file, "w", encoding="utf-8") as f:
+                            json.dump(round_data, f, indent=2,
+                                      ensure_ascii=False)
 
             if success:
                 self.logger.info(
@@ -528,12 +535,12 @@ class VerificationWorker:
                 "history": list(self.history),
             }
 
-            # 如果进行了nsys profiling，将瓶颈信息添加到error_info中
-            if nsys_result and nsys_result.get("bottlenecks"):
-                error_info["nsys_bottlenecks"] = nsys_result["bottlenecks"]
-                error_info["nsys_optimization_suggestions"] = (
-                    self.nsys_profiler.generate_optimization_suggestions(
-                        nsys_result["bottlenecks"]
+            # 如果进行了ncu profiling，将瓶颈信息添加到error_info中
+            if ncu_result and ncu_result.get("bottlenecks"):
+                error_info["ncu_bottlenecks"] = ncu_result["bottlenecks"]
+                error_info["ncu_optimization_suggestions"] = (
+                    self.ncu_profiler.generate_optimization_suggestions(
+                        ncu_result["bottlenecks"]
                     )
                 )
 

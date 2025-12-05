@@ -38,7 +38,7 @@ class WorkerManager:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
-        enable_nsys_profiling: bool = True,  # 新增参数
+        enable_ncu_profiling: bool = True,  # 改为ncu
     ):
         """
         Initialize the worker manager.
@@ -58,7 +58,7 @@ class WorkerManager:
         self.openai_api_key = openai_api_key
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
-        self.enable_nsys_profiling = enable_nsys_profiling
+        self.enable_ncu_profiling = enable_ncu_profiling
 
         # Setup logging
         if log_dir is None:
@@ -165,7 +165,7 @@ class WorkerManager:
                     self.openai_api_key,
                     self.openai_model,
                     self.high_reasoning_effort,
-                    self.enable_nsys_profiling,  # 新增参数
+                    self.enable_ncu_profiling,  # 改为ncu
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -254,7 +254,7 @@ def worker_process(
     openai_api_key: Optional[str],
     openai_model: str,
     high_reasoning_effort: bool,
-    enable_nsys_profiling: bool,  # 新增参数
+    enable_ncu_profiling: bool = True,  # 改为ncu
 ):
     """
     Worker process for kernel verification and refinement.
@@ -273,7 +273,7 @@ def worker_process(
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         high_reasoning_effort=high_reasoning_effort,
-        enable_nsys_profiling=enable_nsys_profiling,  # 新增参数
+        enable_ncu_profiling=enable_ncu_profiling,  # 改为ncu
     )
 
     result = worker.run(
