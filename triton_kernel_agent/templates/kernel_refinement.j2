@@ -33,6 +33,44 @@ TEST RESULTS:
 Error output: {{ error_info.stderr or 'None' }}
 Standard output: {{ error_info.stdout or 'None' }}
 
+{% if error_info.nsys_bottlenecks -%}
+NSYS PERFORMANCE ANALYSIS:
+The following performance bottlenecks were identified using NVIDIA Nsight Systems:
+
+{% if error_info.nsys_bottlenecks.bottleneck_summary -%}
+Bottleneck Summary:
+{% for bottleneck in error_info.nsys_bottlenecks.bottleneck_summary -%}
+- {{ bottleneck }}
+{% endfor %}
+{%- endif %}
+
+{% if error_info.nsys_bottlenecks.gpu_utilization -%}
+- GPU Utilization: {{ "%.1f"|format(error_info.nsys_bottlenecks.gpu_utilization * 100) }}%
+{%- endif %}
+
+{% if error_info.nsys_bottlenecks.memory_bandwidth_gbs -%}
+- Memory Bandwidth: {{ "%.2f"|format(error_info.nsys_bottlenecks.memory_bandwidth_gbs) }} GB/s
+{%- endif %}
+
+{% if error_info.nsys_bottlenecks.top_kernels -%}
+Top Kernels by Duration:
+{% for kernel in error_info.nsys_bottlenecks.top_kernels[:5] -%}
+- {{ kernel.name }}: {{ "%.3f"|format(kernel.avg_duration_us / 1000) }}ms ({{ kernel.count }} calls)
+{% endfor %}
+{%- endif %}
+
+{% if error_info.nsys_optimization_suggestions -%}
+Optimization Suggestions:
+{{ error_info.nsys_optimization_suggestions }}
+{%- endif %}
+
+CRITICAL: Use the nsys analysis above to identify and fix performance bottlenecks. Focus on:
+1. Improving memory bandwidth utilization if it's low
+2. Increasing GPU utilization if it's below 50%
+3. Reducing kernel execution time
+4. Optimizing memory access patterns based on the bottleneck analysis
+{%- endif %}
+
 {% if history_context -%}
 {{ history_context }}
 {%- endif %}
