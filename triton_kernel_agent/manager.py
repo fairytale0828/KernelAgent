@@ -23,6 +23,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
 from contextlib import contextmanager
+import sys
 
 
 class WorkerManager:
@@ -37,6 +38,7 @@ class WorkerManager:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
+        enable_nsys_profiling: bool = False,  # 新增参数
     ):
         """
         Initialize the worker manager.
@@ -56,6 +58,7 @@ class WorkerManager:
         self.openai_api_key = openai_api_key
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
+        self.enable_nsys_profiling = enable_nsys_profiling
 
         # Setup logging
         if log_dir is None:
@@ -79,7 +82,8 @@ class WorkerManager:
     def _setup_logging(self):
         """Setup logging configuration."""
         log_file = (
-            self.log_dir / f"manager_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            self.log_dir /
+            f"manager_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         )
         logging.basicConfig(
             level=logging.INFO,
@@ -124,7 +128,8 @@ class WorkerManager:
         Returns:
             Dictionary with successful kernel and metadata, or None
         """
-        self.logger.info(f"Starting verification with {len(kernel_seeds)} seeds")
+        self.logger.info(
+            f"Starting verification with {len(kernel_seeds)} seeds")
         # Reset cross-worker success signal for a fresh run
         try:
             self.success_event.clear()
@@ -160,6 +165,7 @@ class WorkerManager:
                     self.openai_api_key,
                     self.openai_model,
                     self.high_reasoning_effort,
+                    self.enable_nsys_profiling,  # 新增参数
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -176,11 +182,13 @@ class WorkerManager:
                     result = self.result_queue.get(timeout=1.0)
                     all_results.append(result)
                     if result["success"]:
-                        self.logger.info(f"Worker {result['worker_id']} succeeded in round {result.get('rounds')}!")
+                        self.logger.info(
+                            f"Worker {result['worker_id']} succeeded in round {result.get('rounds')}!")
                         # Don't signal workers to stop - let them all complete
                         # self.success_event.set()
                     else:
-                        self.logger.info(f"Worker {result['worker_id']} completed without success")
+                        self.logger.info(
+                            f"Worker {result['worker_id']} completed without success")
                 except queue.Empty:
                     continue
 
@@ -188,7 +196,8 @@ class WorkerManager:
             for worker in self.workers:
                 worker.join(timeout=10.0)
                 if worker.is_alive():
-                    self.logger.warning(f"Worker {worker.pid} did not finish, terminating")
+                    self.logger.warning(
+                        f"Worker {worker.pid} did not finish, terminating")
                     worker.terminate()
                     worker.join(timeout=2.0)
 
@@ -202,10 +211,11 @@ class WorkerManager:
 
             # Select the best result (prefer successful ones, then by rounds completed)
             successful_results = [r for r in all_results if r.get("success")]
-            
+
             if successful_results:
                 # Return the result with most rounds completed (most refined)
-                best_result = max(successful_results, key=lambda r: r.get("total_rounds_completed", r.get("rounds", 0)))
+                best_result = max(successful_results, key=lambda r: r.get(
+                    "total_rounds_completed", r.get("rounds", 0)))
                 self.logger.info(
                     f"Selected best result from worker {best_result['worker_id']} "
                     f"(completed {best_result.get('total_rounds_completed', best_result.get('rounds'))} rounds)"
@@ -213,8 +223,10 @@ class WorkerManager:
                 return best_result
             elif all_results:
                 # No successful results, return the one that got furthest
-                best_result = max(all_results, key=lambda r: r.get("rounds", 0))
-                self.logger.warning(f"No successful results, returning best attempt from worker {best_result['worker_id']}")
+                best_result = max(
+                    all_results, key=lambda r: r.get("rounds", 0))
+                self.logger.warning(
+                    f"No successful results, returning best attempt from worker {best_result['worker_id']}")
                 return best_result
             else:
                 self.logger.error("No results collected from any worker")
@@ -242,6 +254,7 @@ def worker_process(
     openai_api_key: Optional[str],
     openai_model: str,
     high_reasoning_effort: bool,
+    enable_nsys_profiling: bool,  # 新增参数
 ):
     """
     Worker process for kernel verification and refinement.
@@ -260,6 +273,7 @@ def worker_process(
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         high_reasoning_effort=high_reasoning_effort,
+        enable_nsys_profiling=enable_nsys_profiling,  # 新增参数
     )
 
     result = worker.run(
