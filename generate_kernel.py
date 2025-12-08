@@ -107,7 +107,8 @@ def generate_kernel_direct(
     agent = TritonKernelAgent(
         num_workers=args.workers,
         max_rounds=args.max_rounds,
-        model_name=args.model
+        model_name=args.model,
+        update_interval=args.update_interval
     )
     
     try:
@@ -214,6 +215,8 @@ def main():
                        help="KernelAgent并行工作器数量 (默认: 4)")
     parser.add_argument("--max_rounds", type=int, default=10,
                        help="KernelAgent最大优化轮数 (默认: 10)")
+    parser.add_argument("--update_interval", type=int, default=5,
+                       help="中间更新间隔轮数 (默认: 5)")
     parser.add_argument("--verify", action="store_true",
                        help="验证生成的内核")
     
