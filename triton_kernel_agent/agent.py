@@ -41,6 +41,7 @@ class TritonKernelAgent:
         log_dir: Optional[str] = None,
         model_name: Optional[str] = None,
         high_reasoning_effort: bool = True,
+        update_interval: Optional[int] = None,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -51,6 +52,7 @@ class TritonKernelAgent:
             log_dir: Directory for logs (creates temp if None)
             model_name: OpenAI model to use (loaded from .env if None)
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
+            update_interval: Number of rounds between intermediate updates (default: 5)
         """
         # Load environment variables
         load_dotenv()
@@ -62,6 +64,7 @@ class TritonKernelAgent:
             "OPENAI_MODEL", "claude-sonnet-4-20250514"
         )
         self.high_reasoning_effort = high_reasoning_effort
+        self.update_interval = update_interval if update_interval is not None else 5
 
         # Initialize provider
         self.provider = None
@@ -91,7 +94,11 @@ class TritonKernelAgent:
         # Initialize strategy components
         self.op_classifier = OpClassifier(provider=self.provider, model_name=self.model_name)
         self.strategy_manager = StrategyManager()
-        self.strategy_scorer = StrategyScorer(score_file=self.log_dir / "strategy_scores.json")
+        
+        # Strategy scorer uses data/ directory for long-term state (NOT logs/)
+        data_dir = Path(__file__).parent.parent / "data"
+        data_dir.mkdir(exist_ok=True)
+        self.strategy_scorer = StrategyScorer(score_file=data_dir / "policy_state.json")
 
         # Initialize worker manager
         self.manager = WorkerManager(
@@ -101,6 +108,7 @@ class TritonKernelAgent:
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_model=self.model_name,
             high_reasoning_effort=self.high_reasoning_effort,
+            update_interval=self.update_interval,
         )
 
     def _setup_logging(self):
@@ -536,11 +544,39 @@ def kernel_function(*args, **kwargs):
         )
 
         # Process results and update strategy scores
-        # 更新所有worker的策略得分（不仅仅是最佳结果）
+        # 处理所有worker的中间结果和最终结果
         all_results = result.get("all_results", [result] if result else [])
+        
         for worker_result in all_results:
             strategy_id = worker_result.get("strategy_id")
-            if strategy_id:
+            if not strategy_id:
+                continue
+            
+            # 处理中间结果（每5轮的更新）
+            intermediate_results = worker_result.get("intermediate_results", [])
+            for intermediate in intermediate_results:
+                round_num = intermediate["round"]
+                success = intermediate["success"]
+                speedup = intermediate["speedup"]
+                
+                # 更新统计（每5轮更新一次）
+                self.strategy_scorer.update_score(
+                    op_type=op_type,
+                    strategy_id=strategy_id,
+                    speedup=speedup,
+                    success=success
+                )
+                
+                status = "succeeded" if success else "failed"
+                self.logger.info(
+                    f"Intermediate update for strategy {strategy_id} "
+                    f"(worker {worker_result.get('worker_id')}, round {round_num}): "
+                    f"{status}, speedup={speedup:.2f}"
+                )
+            
+            # 如果没有中间结果（可能是旧版本或update_interval > max_rounds）
+            # 则使用最终结果更新一次
+            if not intermediate_results:
                 success = worker_result.get("success", False)
                 speedup = worker_result.get("speedup", 1.0 if success else 0.0)
                 
@@ -553,7 +589,7 @@ def kernel_function(*args, **kwargs):
                 
                 status = "succeeded" if success else "failed"
                 self.logger.info(
-                    f"Updated score for strategy {strategy_id} (worker {worker_result.get('worker_id')}): "
+                    f"Final update for strategy {strategy_id} (worker {worker_result.get('worker_id')}): "
                     f"{status}, speedup={speedup:.2f}"
                 )
         
