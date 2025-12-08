@@ -75,14 +75,26 @@ class EventAdapter:
             return self._client
         
         # Try to use our provider system first
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if get_model_provider is not None:
             try:
+                logger.info(f"[EventAdapter] Attempting to get provider for model: {self.model}")
                 provider = get_model_provider(self.model)
+                logger.info(f"[EventAdapter] Provider obtained: {provider}")
                 if provider and provider.is_available():
+                    logger.info(f"[EventAdapter] Provider is available, using provider system")
                     self._client = provider
                     return self._client
-            except Exception:
-                pass
+                else:
+                    logger.warning(f"[EventAdapter] Provider not available or None")
+            except Exception as e:
+                logger.error(f"[EventAdapter] Exception getting provider: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            logger.warning(f"[EventAdapter] get_model_provider is None, cannot use provider system")
         
         # Fallback to OpenAI SDK with proper configuration
         if OpenAI is None:

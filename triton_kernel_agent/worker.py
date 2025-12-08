@@ -82,7 +82,7 @@ class VerificationWorker:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
-        enable_ncu_profiling: bool = True,  # 改为ncu
+        enable_ncu_profiling: bool = False,  # 改为ncu
     ):
         """
         Initialize a verification worker.
@@ -436,6 +436,7 @@ class VerificationWorker:
         test_code: str,
         problem_description: str,
         success_event: mp.Event,
+        update_interval: int,
     ) -> Dict[str, Any]:
         """
         Run verification and refinement loop.
@@ -445,6 +446,7 @@ class VerificationWorker:
             test_code: Test code to verify kernel
             problem_description: Problem description for context
             success_event: Shared event to check if another worker succeeded
+            update_interval: Number of rounds between intermediate updates (default: 5)
 
         Returns:
             Dictionary with results
@@ -455,6 +457,9 @@ class VerificationWorker:
 
         best_success_round = None
         best_kernel = None
+        
+        # 用于记录中间更新的结果
+        intermediate_results = []
 
         for round_num in range(self.max_rounds):
             # Don't stop early - complete all rounds regardless of other workers
@@ -527,6 +532,20 @@ class VerificationWorker:
                 best_success_round = round_num + 1
                 best_kernel = current_kernel
                 # Don't return early - continue to explore more rounds
+
+            # 每隔 update_interval 轮，记录一次中间结果
+            if (round_num + 1) % update_interval == 0:
+                # 提取当前轮次的 speedup
+                current_speedup = self._extract_speedup_from_round(round_num + 1)
+                intermediate_results.append({
+                    "round": round_num + 1,
+                    "success": success,
+                    "speedup": current_speedup,
+                })
+                self.logger.info(
+                    f"Intermediate update at round {round_num + 1}: "
+                    f"success={success}, speedup={current_speedup:.2f}x"
+                )
 
             # Refine kernel for next round
             error_info = {
@@ -608,6 +627,7 @@ class VerificationWorker:
                 "total_rounds_completed": self.max_rounds,
                 "history": list(self.history),
                 "speedup": speedup,
+                "intermediate_results": intermediate_results,  # 新增：中间结果
             }
         else:
             self.logger.warning(
@@ -619,4 +639,52 @@ class VerificationWorker:
                 "rounds": self.max_rounds,
                 "history": list(self.history),
                 "speedup": 0.0,
+                "intermediate_results": intermediate_results,  # 新增：中间结果
             }
+    
+    def _extract_speedup_from_round(self, round_num: int) -> float:
+        """
+        从指定轮次提取 speedup
+        
+        Args:
+            round_num: 轮次编号
+            
+        Returns:
+            speedup 值
+        """
+        round_log_file = self.log_dir / f"round_{round_num}.json"
+        if not round_log_file.exists():
+            return 0.0
+        
+        try:
+            with open(round_log_file, "r", encoding="utf-8") as f:
+                round_data = json.load(f)
+            
+            # 检查是否成功
+            if not round_data.get("success", False):
+                return 0.0
+            
+            # 优先从stdout中提取speedup
+            stdout = round_data.get("stdout", "")
+            speedup_match = re.search(r"Speedup:\s+([\d.]+)x", stdout)
+            if speedup_match:
+                return float(speedup_match.group(1))
+            
+            # 尝试从NCU profiling结果中提取
+            if self.enable_ncu_profiling and "ncu_profiling" in round_data:
+                ncu_data = round_data["ncu_profiling"]
+                if "bottlenecks" in ncu_data and "basic_performance" in ncu_data["bottlenecks"]:
+                    basic_perf = ncu_data["bottlenecks"]["basic_performance"]
+                    pytorch_time = basic_perf.get("pytorch_time_ms", 0)
+                    triton_time = basic_perf.get("triton_time_ms", 0)
+                    if pytorch_time > 0 and triton_time > 0:
+                        return pytorch_time / triton_time
+                elif "speedup" in ncu_data:
+                    return ncu_data["speedup"]
+            
+            # 如果找不到但测试成功，返回默认值
+            return 1.0
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to extract speedup from round {round_num}: {e}")
+            return 0.0

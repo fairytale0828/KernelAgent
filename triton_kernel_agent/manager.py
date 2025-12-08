@@ -38,7 +38,8 @@ class WorkerManager:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
-        enable_ncu_profiling: bool = True,  # 改为ncu
+        enable_ncu_profiling: bool = False,  # 改为ncu
+        update_interval: int = 5,
     ):
         """
         Initialize the worker manager.
@@ -51,6 +52,7 @@ class WorkerManager:
             openai_api_key: OpenAI API key for LLM refinement
             openai_model: OpenAI model name
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
+            update_interval: Number of rounds between intermediate updates
         """
         self.num_workers = num_workers
         self.max_rounds = max_rounds
@@ -59,6 +61,7 @@ class WorkerManager:
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
         self.enable_ncu_profiling = enable_ncu_profiling
+        self.update_interval = update_interval
 
         # Setup logging
         if log_dir is None:
@@ -172,6 +175,7 @@ class WorkerManager:
                     self.high_reasoning_effort,
                     self.enable_ncu_profiling,  # 改为ncu
                     strategy_id,  # 传递策略ID
+                    self.update_interval,  # 传递更新间隔
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -264,8 +268,9 @@ def worker_process(
     openai_api_key: Optional[str],
     openai_model: str,
     high_reasoning_effort: bool,
-    enable_ncu_profiling: bool = True,  # 改为ncu
+    enable_ncu_profiling: bool = False,  # 改为ncu
     strategy_id: Optional[str] = None,
+    update_interval: int = 5,
 ):
     """
     Worker process for kernel verification and refinement.
@@ -292,6 +297,7 @@ def worker_process(
         test_code=test_code,
         problem_description=problem_description,
         success_event=success_event,
+        update_interval=update_interval,
     )
 
     # 添加策略ID到结果中
