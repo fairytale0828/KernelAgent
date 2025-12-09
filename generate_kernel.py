@@ -108,7 +108,11 @@ def generate_kernel_direct(
         num_workers=args.workers,
         max_rounds=args.max_rounds,
         model_name=args.model,
-        update_interval=args.update_interval
+        update_interval=args.update_interval,
+        UB=args.UB,
+        LB=args.LB,
+        DB=args.DB,
+        patience_chunks=args.patience_chunks,
     )
     
     try:
@@ -217,6 +221,14 @@ def main():
                        help="KernelAgent最大优化轮数 (默认: 10)")
     parser.add_argument("--update_interval", type=int, default=5,
                        help="中间更新间隔轮数 (默认: 5)")
+    parser.add_argument("--UB", type=float, default=0.8,
+                       help="Upper Bound阈值，达到此性能可写入经验池 (默认: 0.8)")
+    parser.add_argument("--LB", type=float, default=0.3,
+                       help="Lower Bound阈值，低于此性能视为失败路径 (默认: 0.3)")
+    parser.add_argument("--DB", type=float, default=0.4,
+                       help="Degradation Bound阈值，回退超过此值视为严重退化 (默认: 0.4)")
+    parser.add_argument("--patience_chunks", type=int, default=3,
+                       help="连续多少个chunk无改进后早停 (默认: 3)")
     parser.add_argument("--verify", action="store_true",
                        help="验证生成的内核")
     

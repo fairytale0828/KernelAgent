@@ -42,6 +42,10 @@ class TritonKernelAgent:
         model_name: Optional[str] = None,
         high_reasoning_effort: bool = True,
         update_interval: Optional[int] = None,
+        UB: Optional[float] = None,
+        LB: Optional[float] = None,
+        DB: Optional[float] = None,
+        patience_chunks: Optional[int] = None,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -53,6 +57,10 @@ class TritonKernelAgent:
             model_name: OpenAI model to use (loaded from .env if None)
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             update_interval: Number of rounds between intermediate updates (default: 5)
+            UB: Upper Bound threshold for reaching experience pool (default: 0.8)
+            LB: Lower Bound threshold for path failure (default: 0.3)
+            DB: Degradation Bound threshold for severe performance drop (default: 0.4)
+            patience_chunks: Number of chunks without improvement before early stopping (default: 3)
         """
         # Load environment variables
         load_dotenv()
@@ -65,6 +73,10 @@ class TritonKernelAgent:
         )
         self.high_reasoning_effort = high_reasoning_effort
         self.update_interval = update_interval if update_interval is not None else 5
+        self.UB = UB if UB is not None else 0.8
+        self.LB = LB if LB is not None else 0.3
+        self.DB = DB if DB is not None else 0.4
+        self.patience_chunks = patience_chunks if patience_chunks is not None else 3
 
         # Initialize provider
         self.provider = None
@@ -109,6 +121,10 @@ class TritonKernelAgent:
             openai_model=self.model_name,
             high_reasoning_effort=self.high_reasoning_effort,
             update_interval=self.update_interval,
+            UB=self.UB,
+            LB=self.LB,
+            DB=self.DB,
+            patience_chunks=self.patience_chunks,
         )
 
     def _setup_logging(self):

@@ -436,7 +436,11 @@ class VerificationWorker:
         test_code: str,
         problem_description: str,
         success_event: mp.Event,
-        update_interval: int,
+        update_interval: int = 5,
+        UB: float = 0.8,
+        LB: float = 0.3,
+        DB: float = 0.4,
+        patience_chunks: int = 3,
     ) -> Dict[str, Any]:
         """
         Run verification and refinement loop.
@@ -447,19 +451,32 @@ class VerificationWorker:
             problem_description: Problem description for context
             success_event: Shared event to check if another worker succeeded
             update_interval: Number of rounds between intermediate updates (default: 5)
+            UB: Upper Bound threshold for reaching experience pool
+            LB: Lower Bound threshold for path failure
+            DB: Degradation Bound threshold for severe performance drop
+            patience_chunks: Number of chunks without improvement before early stopping
 
         Returns:
             Dictionary with results
         """
-        self.logger.info(f"Starting verification for worker {self.worker_id}")
+        self.logger.info(
+            f"Starting verification for worker {self.worker_id} "
+            f"(UB={UB:.2f}, LB={LB:.2f}, DB={DB:.2f})"
+        )
 
         current_kernel = kernel_code
 
         best_success_round = None
         best_kernel = None
+        best_speedup_global = 0.0  # σ_s(t) - 全局最佳
+        prev_sigma = 0.0
+        last_improve_chunk = 0
         
         # 用于记录中间更新的结果
         intermediate_results = []
+        
+        # 早停原因
+        early_stop_reason = None
 
         for round_num in range(self.max_rounds):
             # Don't stop early - complete all rounds regardless of other workers
@@ -533,19 +550,76 @@ class VerificationWorker:
                 best_kernel = current_kernel
                 # Don't return early - continue to explore more rounds
 
-            # 每隔 update_interval 轮，记录一次中间结果
+            # 更新全局最佳 speedup
+            if success:
+                current_speedup = self._extract_speedup_from_round(round_num + 1)
+                if current_speedup > best_speedup_global:
+                    best_speedup_global = current_speedup
+                    last_improve_chunk = (round_num) // update_interval
+
+            # 每隔 update_interval 轮，记录一次中间结果并进行阈值判断
             if (round_num + 1) % update_interval == 0:
+                chunk_num = (round_num + 1) // update_interval
+                
                 # 提取当前轮次的 speedup
                 current_speedup = self._extract_speedup_from_round(round_num + 1)
+                
+                # 计算指标
+                sigma_t = best_speedup_global  # 截至当前的全局最佳
+                delta_t = max(0.0, prev_sigma - current_speedup)  # 回退幅度
+                
                 intermediate_results.append({
                     "round": round_num + 1,
+                    "chunk": chunk_num,
                     "success": success,
                     "speedup": current_speedup,
+                    "sigma_t": sigma_t,
+                    "delta_t": delta_t,
                 })
+                
                 self.logger.info(
-                    f"Intermediate update at round {round_num + 1}: "
-                    f"success={success}, speedup={current_speedup:.2f}x"
+                    f"Chunk {chunk_num} (round {round_num + 1}): "
+                    f"success={success}, speedup={current_speedup:.2f}x, "
+                    f"sigma={sigma_t:.2f}x, delta={delta_t:.2f}"
                 )
+                
+                # ===== 阈值判断逻辑 =====
+                
+                # 1) 性能低于 LB，视为失败路径
+                if sigma_t < LB and chunk_num > 1:  # 给第一个chunk一些机会
+                    early_stop_reason = f"FAILED_LB: sigma={sigma_t:.2f} < LB={LB:.2f}"
+                    self.logger.warning(
+                        f"Worker {self.worker_id} stopped: {early_stop_reason}"
+                    )
+                    break
+                
+                # 2) 严重回退，触发终止
+                if delta_t > DB and chunk_num > 1:
+                    early_stop_reason = f"DEGRADED: delta={delta_t:.2f} > DB={DB:.2f}"
+                    self.logger.warning(
+                        f"Worker {self.worker_id} stopped: {early_stop_reason}"
+                    )
+                    break
+                
+                # 3) 达到 UB：路径表现足够好
+                if sigma_t >= UB:
+                    early_stop_reason = f"REACHED_UB: sigma={sigma_t:.2f} >= UB={UB:.2f}"
+                    self.logger.info(
+                        f"Worker {self.worker_id} reached UB: {early_stop_reason}"
+                    )
+                    break
+                
+                # 4) 连续若干个 chunk 没提升，早停
+                if chunk_num - last_improve_chunk >= patience_chunks:
+                    early_stop_reason = (
+                        f"NO_PROGRESS: {patience_chunks} chunks without improvement"
+                    )
+                    self.logger.info(
+                        f"Worker {self.worker_id} stopped: {early_stop_reason}"
+                    )
+                    break
+                
+                prev_sigma = sigma_t
 
             # Refine kernel for next round
             error_info = {
@@ -627,7 +701,10 @@ class VerificationWorker:
                 "total_rounds_completed": self.max_rounds,
                 "history": list(self.history),
                 "speedup": speedup,
-                "intermediate_results": intermediate_results,  # 新增：中间结果
+                "best_speedup_global": best_speedup_global,
+                "intermediate_results": intermediate_results,
+                "early_stop_reason": early_stop_reason,
+                "thresholds": {"UB": UB, "LB": LB, "DB": DB},
             }
         else:
             self.logger.warning(
@@ -639,7 +716,10 @@ class VerificationWorker:
                 "rounds": self.max_rounds,
                 "history": list(self.history),
                 "speedup": 0.0,
-                "intermediate_results": intermediate_results,  # 新增：中间结果
+                "best_speedup_global": best_speedup_global,
+                "intermediate_results": intermediate_results,
+                "early_stop_reason": early_stop_reason,
+                "thresholds": {"UB": UB, "LB": LB, "DB": DB},
             }
     
     def _extract_speedup_from_round(self, round_num: int) -> float:

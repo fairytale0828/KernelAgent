@@ -36,16 +36,16 @@
     },
     "reduce": {
       "Triton.TileOnly.v1": {
-        "n": 0,
+        "n": 1,
         "mu_data": 0.0
       },
       "Triton.TileVectorize.v1": {
-        "n": 0,
-        "mu_data": 0.0
+        "n": 1,
+        "mu_data": 3.98
       },
       "Triton.ReduceOpt.v1": {
-        "n": 0,
-        "mu_data": 0.0
+        "n": 1,
+        "mu_data": 3.64
       },
       "Triton.SharedMemOpt.v1": {
         "n": 0,
@@ -60,8 +60,8 @@
         "mu_data": 0.0
       },
       "Triton.TensorCore.v1": {
-        "n": 0,
-        "mu_data": 0.0
+        "n": 1,
+        "mu_data": 5.27
       },
       "Triton.AsyncCopy.v1": {
         "n": 0,
@@ -619,7 +619,7 @@
       "Triton.AsyncCopy.v1": 1.0
     }
   },
-  "global_iteration": 0,
+  "global_iteration": 4,
   "metadata": {
     "prior_weight": 5.0,
     "exploration_coef": 2.0

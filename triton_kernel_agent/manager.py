@@ -38,8 +38,12 @@ class WorkerManager:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
-        enable_ncu_profiling: bool = False,  # 改为ncu
+        enable_ncu_profiling: bool = False,
         update_interval: int = 5,
+        UB: float = 0.8,
+        LB: float = 0.3,
+        DB: float = 0.4,
+        patience_chunks: int = 3,
     ):
         """
         Initialize the worker manager.
@@ -53,6 +57,10 @@ class WorkerManager:
             openai_model: OpenAI model name
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             update_interval: Number of rounds between intermediate updates
+            UB: Upper Bound threshold for reaching experience pool
+            LB: Lower Bound threshold for path failure
+            DB: Degradation Bound threshold for severe performance drop
+            patience_chunks: Number of chunks without improvement before early stopping
         """
         self.num_workers = num_workers
         self.max_rounds = max_rounds
@@ -62,6 +70,12 @@ class WorkerManager:
         self.high_reasoning_effort = high_reasoning_effort
         self.enable_ncu_profiling = enable_ncu_profiling
         self.update_interval = update_interval
+        self.UB = UB
+        self.LB = LB
+        self.DB = DB
+        self.patience_chunks = patience_chunks
+        self.DB = DB
+        self.patience_chunks = patience_chunks
 
         # Setup logging
         if log_dir is None:
@@ -173,9 +187,13 @@ class WorkerManager:
                     self.openai_api_key,
                     self.openai_model,
                     self.high_reasoning_effort,
-                    self.enable_ncu_profiling,  # 改为ncu
-                    strategy_id,  # 传递策略ID
-                    self.update_interval,  # 传递更新间隔
+                    self.enable_ncu_profiling,
+                    strategy_id,
+                    self.update_interval,
+                    self.UB,
+                    self.LB,
+                    self.DB,
+                    self.patience_chunks,
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -268,9 +286,13 @@ def worker_process(
     openai_api_key: Optional[str],
     openai_model: str,
     high_reasoning_effort: bool,
-    enable_ncu_profiling: bool = False,  # 改为ncu
+    enable_ncu_profiling: bool = False,
     strategy_id: Optional[str] = None,
     update_interval: int = 5,
+    UB: float = 0.8,
+    LB: float = 0.3,
+    DB: float = 0.4,
+    patience_chunks: int = 3,
 ):
     """
     Worker process for kernel verification and refinement.
@@ -298,6 +320,10 @@ def worker_process(
         problem_description=problem_description,
         success_event=success_event,
         update_interval=update_interval,
+        UB=UB,
+        LB=LB,
+        DB=DB,
+        patience_chunks=patience_chunks,
     )
 
     # 添加策略ID到结果中
