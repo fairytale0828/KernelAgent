@@ -78,23 +78,32 @@ class EventAdapter:
         import logging
         logger = logging.getLogger(__name__)
         
+        logger.info(f"[EventAdapter] Attempting to get provider for model: {self.model}")
+        print(f"    [EventAdapter] Getting provider for model: {self.model}", flush=True)
+        
         if get_model_provider is not None:
             try:
-                logger.info(f"[EventAdapter] Attempting to get provider for model: {self.model}")
+                logger.info(f"[EventAdapter] Calling get_model_provider...")
+                print(f"    [EventAdapter] Calling get_model_provider...", flush=True)
                 provider = get_model_provider(self.model)
                 logger.info(f"[EventAdapter] Provider obtained: {provider}")
+                print(f"    [EventAdapter] Provider obtained: {provider}", flush=True)
                 if provider and provider.is_available():
                     logger.info(f"[EventAdapter] Provider is available, using provider system")
+                    print(f"    [EventAdapter] Provider is available", flush=True)
                     self._client = provider
                     return self._client
                 else:
                     logger.warning(f"[EventAdapter] Provider not available or None")
+                    print(f"    [EventAdapter] Provider not available", flush=True)
             except Exception as e:
                 logger.error(f"[EventAdapter] Exception getting provider: {e}")
+                print(f"    [EventAdapter] Exception: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
         else:
             logger.warning(f"[EventAdapter] get_model_provider is None, cannot use provider system")
+            print(f"    [EventAdapter] get_model_provider is None", flush=True)
         
         # Fallback to OpenAI SDK with proper configuration
         if OpenAI is None:
