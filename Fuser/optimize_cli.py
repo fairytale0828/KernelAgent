@@ -90,6 +90,9 @@ def run_optimization(
     if out_root:
         base_dir = out_root
     else:
+        # Use .fuse directory (consistent with Fuser pipeline)
+        # If you want to use triton_kernel_logs instead, uncomment the next line:
+        # base_dir = Path.cwd() / "triton_kernel_logs"
         base_dir = Path.cwd() / ".fuse"
     base_dir.mkdir(exist_ok=True, parents=True)
     

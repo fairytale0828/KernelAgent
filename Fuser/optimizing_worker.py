@@ -133,44 +133,98 @@ class OptimizingWorker:
         
         print(f"[{self.cfg.worker_id}] Problem loaded, starting planning phase", flush=True)
         
-        # Phase 1: Planning - Generate multiple optimization plans
-        self.logger.info("Phase 1: Generating optimization plans")
+        # Phase 1: Planning - Generate or load shared optimization plans
+        self.logger.info("Phase 1: Getting optimization plans")
         print(f"[{self.cfg.worker_id}] Calling Planner LLM...", flush=True)
-        try:
-            planner_output = self.optimizer.plan(
-                problem_code=problem_code,
-                output_dir=self.dirs["planning"],
-            )
-            print(f"[{self.cfg.worker_id}] Planner completed, generated {len(planner_output.plans)} plans", flush=True)
-            self.logger.info(f"Generated {len(planner_output.plans)} plans")
-            self.logger.info(f"Detected patterns: {planner_output.detected_patterns}")
-        except Exception as e:
-            print(f"[{self.cfg.worker_id}] Planning failed: {e}", flush=True)
-            self.logger.error(f"Planning failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return
+        
+        # Check if shared plans are available
+        shared_plans_path = getattr(self, 'shared_plans_path', None)
+        if shared_plans_path and Path(shared_plans_path).exists():
+            # Load shared plans
+            print(f"[{self.cfg.worker_id}] Loading shared plans from {shared_plans_path}", flush=True)
+            try:
+                import json
+                from .llm_optimizer import PlannerOutput, OptimizationPlan
+                with open(shared_plans_path, 'r') as f:
+                    plans_data = json.load(f)
+                
+                # Reconstruct PlannerOutput
+                plans = []
+                for plan_data in plans_data.get("plans", []):
+                    plan = OptimizationPlan(**plan_data)
+                    plans.append(plan)
+                
+                planner_output = PlannerOutput(
+                    problem_fingerprint=plans_data.get("problem_fingerprint", ""),
+                    detected_patterns=plans_data.get("detected_patterns", []),
+                    plans=plans,
+                    recommendations=plans_data.get("recommendations", {}),
+                )
+                
+                print(f"[{self.cfg.worker_id}] Loaded {len(planner_output.plans)} shared plans", flush=True)
+                self.logger.info(f"Loaded {len(planner_output.plans)} shared plans")
+            except Exception as e:
+                print(f"[{self.cfg.worker_id}] Failed to load shared plans: {e}, generating independently", flush=True)
+                self.logger.warning(f"Failed to load shared plans: {e}, generating independently")
+                shared_plans_path = None
+        
+        if not shared_plans_path or not Path(shared_plans_path).exists():
+            # Generate plans independently
+            try:
+                planner_output = self.optimizer.plan(
+                    problem_code=problem_code,
+                    output_dir=self.dirs["planning"],
+                )
+                print(f"[{self.cfg.worker_id}] Planner completed, generated {len(planner_output.plans)} plans", flush=True)
+                self.logger.info(f"Generated {len(planner_output.plans)} plans")
+                self.logger.info(f"Detected patterns: {planner_output.detected_patterns}")
+            except Exception as e:
+                print(f"[{self.cfg.worker_id}] Planning failed: {e}", flush=True)
+                self.logger.error(f"Planning failed: {e}")
+                import traceback
+                traceback.print_exc()
+                return
         
         # Select top K plans to implement
+        # Strategy: Different workers should try different plans for better exploration
         recommended_ids = planner_output.recommendations.get("pick_first", [])
         plans_to_try = []
         
-        # First add recommended plans
-        for plan_id in recommended_ids[:self.num_plans_to_try]:
-            plan = next((p for p in planner_output.plans if p.plan_id == plan_id), None)
-            if plan:
-                plans_to_try.append(plan)
+        # Get worker index from worker_id (e.g., "worker_01" -> 0)
+        try:
+            worker_idx = int(self.cfg.worker_id.split('_')[-1]) - 1
+        except:
+            worker_idx = 0
         
-        # Fill remaining slots with other plans
+        # Strategy 1: If we have recommendations, distribute them across workers
+        if recommended_ids:
+            # Each worker starts from a different offset in the recommended list
+            start_idx = (worker_idx * self.num_plans_to_try) % len(recommended_ids)
+            for i in range(self.num_plans_to_try):
+                plan_id = recommended_ids[(start_idx + i) % len(recommended_ids)]
+                plan = next((p for p in planner_output.plans if p.plan_id == plan_id), None)
+                if plan and plan not in plans_to_try:
+                    plans_to_try.append(plan)
+        
+        # Strategy 2: Fill remaining slots with non-recommended plans
+        # Each worker gets a different subset
         remaining_slots = self.num_plans_to_try - len(plans_to_try)
         if remaining_slots > 0:
-            for plan in planner_output.plans:
-                if plan not in plans_to_try:
-                    plans_to_try.append(plan)
-                    if len(plans_to_try) >= self.num_plans_to_try:
-                        break
+            non_recommended = [p for p in planner_output.plans if p not in plans_to_try]
+            start_idx = (worker_idx * remaining_slots) % max(len(non_recommended), 1)
+            for i in range(remaining_slots):
+                if non_recommended:
+                    idx = (start_idx + i) % len(non_recommended)
+                    plans_to_try.append(non_recommended[idx])
         
-        self.logger.info(f"Selected {len(plans_to_try)} plans to implement: {[p.plan_id for p in plans_to_try]}")
+        self.logger.info(
+            f"Worker {self.cfg.worker_id} selected {len(plans_to_try)} plans: "
+            f"{[p.plan_id for p in plans_to_try]}"
+        )
+        print(
+            f"[{self.cfg.worker_id}] Selected plans: {[p.plan_id for p in plans_to_try]}",
+            flush=True
+        )
         
         # Phase 2: Implementation - Try each plan
         results: List[OptimizationResult] = []

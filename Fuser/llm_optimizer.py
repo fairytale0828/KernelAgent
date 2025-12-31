@@ -213,6 +213,13 @@ class LLMOptimizer:
             perf_context=perf_context,
         )
         
+        # Add explicit instruction for speedup calculation
+        user_prompt += "\n\nIMPORTANT: The microbench() function MUST:\n"
+        user_prompt += "1. Benchmark both the Triton kernel_function AND a PyTorch reference implementation\n"
+        user_prompt += "2. Calculate and print the speedup as: Speedup = pytorch_time / triton_time\n"
+        user_prompt += "3. Print the speedup in the format: 'Speedup: X.XXx' (e.g., 'Speedup: 2.50x')\n"
+        user_prompt += "4. The PyTorch reference should use the same operations as in the original problem\n"
+        
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
             (output_dir / "coder_prompt.txt").write_text(user_prompt, encoding="utf-8")
@@ -423,6 +430,41 @@ HARD REQUIREMENTS
 
 So DO NOT worry about proving equivalence; focus on proposing strong candidates with clear assumptions.
 
+TRITON-SPECIFIC CONSTRAINTS:
+
+Your plans will be implemented in Triton. Consider these constraints when proposing plans:
+
+HARD LIMITS (plans must respect these):
+- No per-element dynamic branching based on data values (causes warp divergence)
+- Block sizes should be power-of-2 (16, 32, 64, 128, 256) for best performance
+- Limited atomic operations (only add, max, min on specific types)
+- No recursion or dynamic function calls
+- No dynamic memory allocation inside kernels
+
+PERFORMANCE CONSIDERATIONS (plans should consider these):
+- Memory access patterns: prefer coalesced access (contiguous, aligned)
+- Minimize global memory round-trips by fusing operations
+- Use shared memory for intra-block data reuse
+- Avoid warp divergence (keep control flow uniform across threads)
+- fp16/bf16 preferred over fp64 for performance on modern GPUs
+- Tile sizes should match GPU architecture (e.g., 128x128 for A100)
+
+TRITON STRENGTHS (plans can leverage these):
+- Excellent at tiled matrix operations (tl.dot is highly optimized)
+- Good at fused elementwise operations (reduce memory bandwidth)
+- Supports software pipelining via num_stages parameter
+- Autotune capability for different block sizes
+- Efficient load/store with masking for boundary handling
+- Streaming/online algorithms work well (e.g., FlashAttention)
+
+GUIDANCE FOR PLAN DESIGN:
+- When proposing algorithmic variants, ensure they fit Triton's block-based execution model
+- When proposing algebraic transforms, verify they don't require unsupported operations
+- If a plan requires features Triton doesn't support well, mark it as "high" implementation_risk
+- In expected_tradeoffs, explicitly note any Triton-specific concerns
+- Prefer plans that maximize data reuse within thread blocks
+- Prefer plans that minimize synchronization and global memory access
+
 OUTPUT JSON SCHEMA (must follow exactly):
 {
   "problem_fingerprint": "<string>",
@@ -555,10 +597,47 @@ INPUTS
 IMPLEMENTATION GUIDELINES
 - You may implement as 1 kernel or multiple kernels, but aim to minimize launches.
 - If the plan includes schedule_search_space, pick a reasonable default and implement autotune if you can do so succinctly.
+
+CRITICAL TRITON AUTOTUNE RULES:
+  * If using @triton.autotune, ALL meta-parameters in configs MUST also appear in the kernel signature with tl.constexpr type.
+  * Example CORRECT pattern:
+    @triton.autotune(
+        configs=[
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 32}, num_warps=4),
+        ],
+        key=['M', 'N', 'K'],
+    )
+    @triton.jit
+    def kernel(..., BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        # All three BLOCK_M, BLOCK_N, BLOCK_K must be in both places!
+  * NEVER define a meta-parameter in configs but not in the kernel signature.
+  * NEVER define a meta-parameter in the kernel signature but not in configs (unless it's a constant).
+  * For GEMM-style kernels, you MUST define BLOCK_K for the K-dimension tiling.
+
 - Avoid common Triton pitfalls:
   * Do not use tl.broadcast on Python scalars. Use scalar constants directly (e.g., tl.maximum(x, 0.0)).
   * Use tl.load/tl.store masks for tails.
   * Keep BLOCK sizes power-of-two when possible.
+  * For GEMM loops, use: for k in range(0, K, BLOCK_K) NOT range(0, K, K)
+  
+CRITICAL: Triton Language (tl) Available Math Functions:
+  * Available: tl.exp, tl.exp2, tl.log, tl.log2, tl.sqrt, tl.rsqrt, tl.sin, tl.cos, tl.sigmoid
+  * NOT available: tl.tanh, tl.erf, tl.gelu
+  * For GELU activation, use one of these implementations:
+    1. Sigmoid approximation (RECOMMENDED for Triton): 
+       gelu = x * tl.sigmoid(1.702 * x)  # Use literal constant, NOT a variable
+    2. If you need a constant, declare it as constexpr:
+       GELU_SCALE: tl.constexpr = 1.702
+       gelu = x * tl.sigmoid(GELU_SCALE * x)
+    3. Manual tanh approximation: 
+       # tanh(x) ≈ (exp(2x) - 1) / (exp(2x) + 1)
+       # But sigmoid is more efficient: tanh(x) = 2*sigmoid(2x) - 1
+    4. For high accuracy, use: gelu = 0.5 * x * (1.0 + tl.erf_approx(x / 1.4142135623730951))
+       where erf_approx can be implemented using polynomial approximation
+  * NEVER use torch.tanh, torch.gelu, or any torch math functions inside @triton.jit kernels
+  * torch functions are ONLY allowed in: tensor allocation, run_tests reference, and microbench timing
+  * NEVER use global variables inside @triton.jit kernels unless declared as tl.constexpr
+  
 - If attention pattern:
   * Prefer streaming/online softmax with m_i and l_i accumulators (FlashAttention-style).
   * Handle causal mask if needed.
@@ -583,10 +662,29 @@ OUTPUT FORMAT
         prompt_parts.append("""Audit the following candidate code for policy compliance and likely runtime issues.
 
 HARD CHECKS
-1) kernel_function must not call torch math ops (torch.relu, torch.matmul, torch.softmax, torch.nn, F.* etc).
-   Torch is allowed only for allocations and inside run_tests reference path.
+1) kernel_function must not call TORCH math ops (torch.relu, torch.matmul, torch.softmax, torch.nn, F.* etc).
+   IMPORTANT: Triton language functions (tl.*) ARE ALLOWED and REQUIRED. These include:
+   - tl.dot (matrix multiplication) - REQUIRED for GEMM
+   - tl.exp, tl.log, tl.sqrt, tl.rsqrt - REQUIRED for math operations
+   - tl.max, tl.min, tl.sum - REQUIRED for reductions
+   - tl.sigmoid - REQUIRED for GELU approximation
+   - tl.load, tl.store - REQUIRED for memory access
+   - tl.where, tl.maximum, tl.minimum - REQUIRED for conditional operations
+   ONLY torch.* functions are forbidden inside @triton.jit kernels.
+   Torch is allowed only for: tensor allocation, run_tests reference, and microbench timing.
+   
+2) CRITICAL: Triton does NOT have tl.tanh or tl.gelu. Use tl.sigmoid for GELU: x * tl.sigmoid(1.702 * x)
 2) Shape consistency: tensor shapes used in tl.load/tl.store and pointer arithmetic must match plan's shapes.
-3) Triton pitfalls: scalar broadcast misuse, missing masks, wrong strides, wrong grid, race conditions.
+3) Triton pitfalls: 
+   - Scalar broadcast misuse (tl.broadcast on scalars)
+   - Missing masks in tl.load/tl.store
+   - Wrong strides or grid configuration
+   - Race conditions
+   - AUTOTUNE CONFLICTS: Check if meta-parameters in @triton.autotune configs match kernel signature exactly
+   - MISSING BLOCK_K: For GEMM kernels, BLOCK_K must be defined in both autotune configs and kernel signature
+   - LOOP BOUNDS: Check for k in range(0, K, K) which should be range(0, K, BLOCK_K)
+   - INVALID FUNCTIONS: Check for tl.tanh (doesn't exist), use tl.sigmoid instead
+   - DO NOT flag tl.dot, tl.exp, tl.max, tl.sum, tl.sigmoid as violations - these are REQUIRED Triton functions
 4) If the plan claims online softmax, check numerical stability and invariants (m_i, l_i).
 5) Confirm run_tests prints 'PASS' and exits 0 on success.
 
@@ -667,6 +765,12 @@ ADDITIONAL RULES
 - If you see shape mismatch, fix pointer arithmetic and grid mapping first.
 - If correctness fails for fp16/bf16, consider accumulation in fp32 where appropriate.
 - If attention online softmax unstable, enforce log-sum-exp stability with running m_i and l_i.
+- CRITICAL: If you see "Conflicting meta-parameters" error, ensure ALL parameters in @triton.autotune configs are also in kernel signature with tl.constexpr.
+- CRITICAL: For GEMM kernels, you MUST define BLOCK_K in both autotune configs and kernel signature.
+- CRITICAL: Fix loop bounds like "for k in range(0, K, K)" to "for k in range(0, K, BLOCK_K)".
+- CRITICAL: If you see "AttributeError: module 'triton.language' has no attribute 'tanh'", replace with sigmoid-based GELU: x * tl.sigmoid(1.702 * x)
+- CRITICAL: NEVER use tl.tanh, tl.gelu, or tl.erf - they don't exist in Triton. Use tl.sigmoid, tl.exp, tl.log instead.
+- CRITICAL: If you see "Cannot access global variable" error, use literal constants (1.702) instead of variables, or declare as tl.constexpr.
 
 OUTPUT FORMAT
 Return only one fenced Python block with the corrected full file.

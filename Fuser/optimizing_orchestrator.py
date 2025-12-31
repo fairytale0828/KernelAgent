@@ -86,11 +86,12 @@ def _optimizing_worker_process_main(
     # Get optimization parameters
     num_plans_to_try = cfg_payload.get("num_plans_to_try", 3)
     max_refinements_per_plan = cfg_payload.get("max_refinements_per_plan", 3)
+    shared_plans_path = cfg_payload.get("shared_plans_path")
 
     print(f"[Worker {cfg_payload['worker_id']}] Starting optimization worker", flush=True)
     
     try:
-        _Worker(
+        worker = _Worker(
             cfg=wcfg,
             problem_path=_P(problem_path),
             winner_queue=winner_queue,
@@ -98,7 +99,11 @@ def _optimizing_worker_process_main(
             on_delta=_on_delta,
             num_plans_to_try=num_plans_to_try,
             max_refinements_per_plan=max_refinements_per_plan,
-        ).run()
+        )
+        # Set shared_plans_path as attribute
+        if shared_plans_path:
+            worker.shared_plans_path = shared_plans_path
+        worker.run()
         print(f"[Worker {cfg_payload['worker_id']}] Completed successfully", flush=True)
     except Exception as e:
         print(f"[Worker {cfg_payload['worker_id']}] Error: {e}", flush=True)
@@ -260,6 +265,37 @@ class OptimizingOrchestrator:
             print(f"Spawning {self.cfg.workers} workers...")
             sys.stdout.flush()
 
+            # Generate shared plans once (instead of per-worker)
+            shared_plans_path = None
+            if self.cfg.workers > 1:
+                print("Generating shared optimization plans...")
+                sys.stdout.flush()
+                try:
+                    from .llm_optimizer import LLMOptimizer
+                    optimizer = LLMOptimizer(
+                        model=self.cfg.model,
+                        timeout_s=self.cfg.llm_timeout_s,
+                        enable_reasoning_extras=self.cfg.enable_reasoning_extras,
+                    )
+                    problem_code = self.cfg.problem_path.read_text(encoding="utf-8")
+                    planner_output = optimizer.plan(
+                        problem_code=problem_code,
+                        output_dir=self.orchestrator_dir / "shared_planning",
+                    )
+                    # Save shared plans
+                    shared_plans_path = self.orchestrator_dir / "shared_plans.json"
+                    import json
+                    from dataclasses import asdict
+                    shared_plans_path.write_text(
+                        json.dumps(asdict(planner_output), indent=2), encoding="utf-8"
+                    )
+                    print(f"Generated {len(planner_output.plans)} shared plans")
+                    sys.stdout.flush()
+                except Exception as e:
+                    self.logger.warning(f"Failed to generate shared plans: {e}, workers will generate independently")
+                    print(f"Warning: Failed to generate shared plans, workers will generate independently")
+                    sys.stdout.flush()
+
             for i in range(self.cfg.workers):
                 wcfg = self._make_worker_cfg(i)
                 dq: mp.Queue[str] = mp.Queue(maxsize=256)
@@ -281,6 +317,7 @@ class OptimizingOrchestrator:
                     "shared_digests_dir": str(wcfg.shared_digests_dir),
                     "num_plans_to_try": self.num_plans_per_worker,
                     "max_refinements_per_plan": self.max_refinements_per_plan,
+                    "shared_plans_path": str(shared_plans_path) if shared_plans_path else None,
                 }
                 
                 p = mp.Process(
