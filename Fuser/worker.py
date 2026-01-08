@@ -106,9 +106,10 @@ class Worker:
             _write_json(self.cfg.workspace_dir / "state.json", asdict(state))
 
             # Render prompt
+            # Rotate prompt variants across iterations to explore alternatives.
             rp = render_prompt(
                 problem_path=self.problem_path,
-                variant_index=self.cfg.variant_index,
+                variant_index=self.cfg.variant_index + (k - 1),
                 attempt_index=k,
                 error_context=state.last_error,
                 enable_reasoning_extras=self.cfg.enable_reasoning_extras,

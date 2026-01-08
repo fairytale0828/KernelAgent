@@ -292,6 +292,7 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
         - Implement the exact semantics of the listed ops in the given order for the provided shapes.
         - Use {layout} layout and {dtype} dtype semantics.
         - The test will import kernel_function and compare to the reference implementation below.
+        - You may use strictly equivalent algebraic rearrangements to reduce intermediates; if you do, add a brief comment explaining the equivalence.
 
         Test tolerance policy (enforced in generated tests):
         - Default tolerances: rtol=1e-3, atol=1e-3.

@@ -22,12 +22,12 @@ from typing import Optional, Any
 # - System + User messages only (Responses API input schema)
 
 
-VARIANT_WORDINGS: tuple[str, str, str, str] = (
-    "Rewrite the provided model into fusable subgraph modules with explicit input/output shapes.",
-    "Refactor the given model into fusion-friendly submodules, specifying exact tensor shapes.",
-    "Decompose the model into subgraphs suitable for fusion; document all input/output shapes.",
-    "Split the model into fusable modules and clearly state the shape contracts for each.",
-    "Every fused subgraph must be packaged as its own nn.Module (no inline nn.* ops at top level)",
+VARIANT_WORDINGS: tuple[str, str, str, str, str] = (
+    "Rewrite the model into fusable subgraph modules with explicit input/output shapes.",
+    "Refactor into fusion-friendly submodules and specify exact tensor shapes.",
+    "Decompose into subgraphs suitable for fusion and document all shape contracts.",
+    "Split into fusable modules and clearly state each input/output shape contract.",
+    "Each fused subgraph must be its own nn.Module (no inline nn.* ops at top level).",
 )
 
 BASE_DEVELOPER_PROMPT = (
@@ -41,8 +41,14 @@ BASE_DEVELOPER_PROMPT = (
     "- No network or file I/O outside the current directory. Avoid extra dependencies.\n"
     "- Deterministic: set seeds where relevant.\n\n"
     "Fusion guidance:\n"
-    "- Detect scaled dot-product attention patterns and aggressively fuse the entire block (QKV linears, splits/reshapes, scaled QK^T, causal masking, ReLU or gating, applying V, and head merge) into a single attention subgraph whenever feasible.\n"
-    "- Only decompose attention into smaller subgraphs when you are certain fusion is impossible.\n\n"
+    "- You may apply algebraic rearrangements that are strictly equivalent for the given shapes/dtypes (associativity, distributivity, scalar factor moves). Only use transformations that preserve numerical semantics for the stated precision.\n"
+    "- Prefer fusion strategies that reduce intermediate tensors and kernel launches; document shape contracts for every subgraph.\n"
+    "- Detect scaled dot-product attention patterns and fuse the full block (QKV linears, splits/reshapes, scaled QK^T, masking, activation/gating, applying V, head merge) into a single attention subgraph whenever feasible.\n"
+    "- Only decompose attention into smaller subgraphs when you are certain fusion is impossible.\n"
+    "- If you use a non-obvious algebraic rearrangement, include a short comment in the code explaining the equivalence.\n\n"
+    "Search guidance:\n"
+    "- If ERROR_CONTEXT is present, revise the fusion strategy or subgraph boundaries, not just constants.\n"
+    "- If no ERROR_CONTEXT, still prefer the simplest valid fusion that minimizes intermediates.\n\n"
     "Iteration contract:\n"
     "- On each attempt, re-emit the entire single-file solution.\n"
     "- When ERROR_CONTEXT is provided, carefully analyze and fix issues, then re-emit the whole file.\n"
@@ -63,6 +69,31 @@ def _variant_line(idx: int) -> str:
     return VARIANT_WORDINGS[i]
 
 
+def _detect_focus(problem_file_content: str) -> list[str]:
+    text = problem_file_content.lower()
+    focus: list[str] = []
+    if "attention" in text or "scaled_dot_product" in text or "softmax" in text:
+        focus.append("If attention is present, prefer a single fused attention subgraph.")
+    if "rmsnorm" in text or "rms_norm" in text:
+        focus.append(
+            "If RMSNorm is present, consider moving scalar factors when algebraically equivalent."
+        )
+    if "lora" in text or "low_rank" in text:
+        focus.append(
+            "If LoRA is present, consider fusing linear + low-rank updates when equivalent."
+        )
+    return focus
+
+
+def _format_focus_hints(problem_file_content: str) -> str:
+    hints = _detect_focus(problem_file_content)
+    if not hints:
+        return ""
+    lines = ["FUSION_FOCUS:"]
+    lines.extend(f"- {h}" for h in hints)
+    return "\n".join(lines)
+
+
 def build_user_prompt(
     attempt_index: int,
     problem_file_content: str,
@@ -74,6 +105,10 @@ def build_user_prompt(
     parts.append("")
     parts.append(BASE_DEVELOPER_PROMPT)
     parts.append("")
+    focus = _format_focus_hints(problem_file_content)
+    if focus:
+        parts.append(focus)
+        parts.append("")
     parts.append(f"ATTEMPT: {attempt_index}")
     if error_context:
         parts.append("")
