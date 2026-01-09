@@ -25,7 +25,7 @@ class OrchestratorConfig:
     problem_path: Path
     model: str
     workers: int = 4
-    max_iters: int = 10
+    max_iters: int = 5
     llm_timeout_s: int = 120
     run_timeout_s: int = 180
     stream_mode: str = "all"  # all|winner|none

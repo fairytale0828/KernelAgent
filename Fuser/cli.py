@@ -67,7 +67,7 @@ def cmd_run(argv: list[str]) -> int:
         help="OpenAI model name (Responses API, default: gpt-5)",
     )
     p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--max-iters", type=int, default=10)
+    p.add_argument("--max-iters", type=int, default=5)
     p.add_argument("--llm-timeout-s", type=int, default=120)
     p.add_argument("--run-timeout-s", type=int, default=180)
     p.add_argument("--stream", choices=["all", "winner", "none"], default="all")

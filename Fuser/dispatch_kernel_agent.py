@@ -344,9 +344,10 @@ def run(
         sg_dir.mkdir(parents=True, exist_ok=True)
         (sg_dir / "problem.txt").write_text(pdesc, encoding="utf-8")
 
+        # KernelAgent调用参数
         # Pin KernelAgent concurrency defaults: 4 workers, 10 rounds
         local_agent = TritonKernelAgent(
-            num_workers=4, max_rounds=10, model_name=agent_model
+            num_workers=4, max_rounds=5, model_name=agent_model
         )
         try:
             result = local_agent.generate_kernel(

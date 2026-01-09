@@ -307,7 +307,7 @@ class AutoKernelRouter:
         self,
         ka_model: Optional[str] = None,
         ka_num_workers: int = 4,
-        ka_max_rounds: int = 10,
+        ka_max_rounds: int = 5,
         ka_high_reasoning: bool = True,
         # Router LLM
         router_model: Optional[str] = None,
@@ -684,7 +684,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Model for KernelAgent (optional; uses env default if omitted)",
     )
     p.add_argument("--ka-workers", type=int, default=4)
-    p.add_argument("--ka-rounds", type=int, default=10)
+    p.add_argument("--ka-rounds", type=int, default=5)
     p.add_argument("--no-ka-high-reasoning", action="store_true")
     p.add_argument("--router-model", default="gpt-5")
     p.add_argument("--no-router-high-reasoning", action="store_true")

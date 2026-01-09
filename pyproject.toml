@@ -42,6 +42,9 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov",
 ]
+# E-Graph 代数重写引擎依赖 (可选)
+# 基础功能不需要额外依赖，使用纯 Python 实现
+egraph = []
 
 [project.scripts]
 fuser-ui = "scripts.fuser_ui:main"
