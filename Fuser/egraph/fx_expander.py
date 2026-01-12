@@ -166,6 +166,59 @@ class FXExpander:
         self.expand_activations = expand_activations
         self._node_counter = 0
 
+    def _normalize_code(self, code: str) -> str:
+        """
+        规范化代码字符串
+
+        处理常见问题:
+        - 不一致的缩进
+        - 模块定义代码 (nn.Linear(...))
+        - 空代码
+        """
+        if not code:
+            return ""
+
+        # 去除首尾空白
+        code = code.strip()
+
+        # 检查是否是模块定义代码（不是 forward 函数）
+        if code.startswith("self.") and "nn." in code and "=" in code:
+            # 这是 __init__ 中的代码，如 "self.linear = nn.Linear(...)"
+            # 无法展开，返回空
+            return ""
+
+        # 规范化缩进：找到最小非空行的缩进，然后统一去除
+        lines = code.split('\n')
+        non_empty_lines = [l for l in lines if l.strip()]
+
+        if not non_empty_lines:
+            return ""
+
+        # 计算最小缩进
+        min_indent = float('inf')
+        for line in non_empty_lines:
+            stripped = line.lstrip()
+            if stripped:
+                indent = len(line) - len(stripped)
+                min_indent = min(min_indent, indent)
+
+        if min_indent == float('inf'):
+            min_indent = 0
+
+        # 去除公共缩进
+        normalized_lines = []
+        for line in lines:
+            if line.strip():
+                # 去除最小缩进
+                if len(line) >= min_indent:
+                    normalized_lines.append(line[min_indent:])
+                else:
+                    normalized_lines.append(line.lstrip())
+            else:
+                normalized_lines.append("")
+
+        return '\n'.join(normalized_lines)
+
     def expand_from_code(
         self,
         code: str,
@@ -242,13 +295,30 @@ class FXExpander:
         code: str,
         weight_shapes: Optional[Dict[str, List[int]]]
     ) -> Optional[nn.Module]:
-        """从代码构建 PyTorch 模块"""
+        """从代码构建 PyTorch 模块
+
+        注意：以下情况无法使用 fx.trace，会返回 None 让 AST 解析器处理：
+        1. 代码包含 self.xxx() 子模块调用（如 self.linear(x)）
+        2. 代码是模块定义而非 forward 函数
+        3. 代码格式不正确
+        """
         # 清理代码
-        code = textwrap.dedent(code)
+        code = textwrap.dedent(code).strip()
+
+        if not code:
+            return None
+
+        # 检查是否包含 self.xxx() 子模块调用 - 这类代码无法用 fx trace
+        # 因为我们没有实际的子模块实例
+        has_self_method_call = self._has_self_method_call(code)
+        has_forward_def = "def forward" in code
+
+        if has_self_method_call and not has_forward_def:
+            # 有 self.xxx() 调用但不是完整模块定义，无法 trace
+            return None
 
         # 构建完整的模块定义
-        module_code = f'''
-import torch
+        module_code = '''import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
@@ -266,18 +336,25 @@ class DynamicModule(nn.Module):
                 module_code += f"        self.{safe_name} = nn.Parameter(torch.randn({shape}))\n"
 
         # 添加 forward 方法
-        # 检查 code 是否已经是完整的 forward 定义
-        if "def forward" in code:
-            # 提取 forward 函数体
-            forward_code = code
+        if has_forward_def:
+            # 已经是完整的 forward 定义，直接添加（注意缩进）
+            # 需要确保 forward 方法有正确的类级别缩进
+            forward_lines = code.split('\n')
+            module_code += "\n"
+            for line in forward_lines:
+                if line.strip():
+                    module_code += "    " + line + "\n"
+                else:
+                    module_code += "\n"
         else:
-            # 假设 code 是函数体
-            forward_code = f"    def forward(self, x):\n"
+            # 代码片段，包装成 forward
+            module_code += "\n    def forward(self, x):\n"
             for line in code.split('\n'):
                 if line.strip():
-                    forward_code += f"        {line}\n"
-
-        module_code += textwrap.indent(forward_code, "    ")
+                    module_code += "        " + line.strip() + "\n"
+            # 确保有返回值
+            if "return" not in code:
+                module_code += "        return x\n"
 
         # 执行代码
         local_ns: Dict[str, Any] = {}
@@ -290,6 +367,21 @@ class DynamicModule(nn.Module):
             print(f"Failed to build module: {e}")
 
         return None
+
+    def _has_self_method_call(self, code: str) -> bool:
+        """检查代码是否包含 self.xxx() 形式的方法调用"""
+        import re
+        # 匹配 self.xxx( 但排除 self.xxx = 赋值
+        # 例如: self.linear(x), self.norm(x) 等
+        pattern = r'self\.(\w+)\s*\('
+        matches = re.findall(pattern, code)
+
+        # 排除常见的属性访问（不是方法调用）
+        excluded = {'eps', 'weight', 'bias', 'scale', 'gamma', 'beta'}
+        for match in matches:
+            if match.lower() not in excluded:
+                return True
+        return False
 
     def _fx_graph_to_expanded(
         self,
@@ -714,19 +806,19 @@ class DynamicModule(nn.Module):
     ) -> List[LowLevelOp]:
         """
         展开 linear 操作为 matmul + add
-        
+
         F.linear(input, weight, bias) -> matmul(input, weight.T) + bias
-        
+
         注意：在 E-Graph 规则中，我们假设 weight 已经是正确的形状，
         所以这里直接使用 matmul 而不是 matmul + transpose
         """
         ops = []
-        
+
         # 获取输入
         x = input_names[0] if len(input_names) > 0 else "input"
         weight = input_names[1] if len(input_names) > 1 else "weight"
         bias = input_names[2] if len(input_names) > 2 else None
-        
+
         if bias and bias not in ("None", "none", ""):
             # 有 bias: matmul + add
             mm_output = f"{output_name}_mm"
@@ -750,7 +842,7 @@ class DynamicModule(nn.Module):
                 output=output_name,
                 dtype=dtype
             ))
-        
+
         return ops
 
     def _expand_from_ast(
@@ -773,20 +865,42 @@ class DynamicModule(nn.Module):
         inputs: List[Tuple[str, List[int]]] = []
         outputs: List[Tuple[str, List[int]]] = []
 
-        # 解析代码
-        code = textwrap.dedent(code).strip()
+        # 清理和规范化代码
+        code = self._normalize_code(code)
+
+        if not code or not code.strip():
+            # 空代码，返回空图
+            return ExpandedGraph(
+                ops=[],
+                inputs=[(f"input_{i}", shape)
+                        for i, shape in enumerate(input_shapes)],
+                outputs=[("input_0", [])],
+                weights=weight_shapes or {},
+                metadata={"expansion_method": "empty"}
+            )
 
         try:
             tree = ast.parse(code)
         except SyntaxError:
             # 尝试作为函数体解析
-            wrapped = f"def forward(self, x):\n{textwrap.indent(code, '    ')}"
             try:
+                wrapped = f"def forward(self, x):\n{textwrap.indent(code, '    ')}"
                 tree = ast.parse(wrapped)
             except SyntaxError:
                 # 最后尝试：作为单行表达式
-                wrapped = f"result = {code}"
-                tree = ast.parse(wrapped)
+                try:
+                    wrapped = f"result = {code}"
+                    tree = ast.parse(wrapped)
+                except SyntaxError:
+                    # 无法解析，返回空图
+                    return ExpandedGraph(
+                        ops=[],
+                        inputs=[(f"input_{i}", shape)
+                                for i, shape in enumerate(input_shapes)],
+                        outputs=[("input_0", [])],
+                        weights=weight_shapes or {},
+                        metadata={"expansion_method": "parse_failed"}
+                    )
 
         # 遍历 AST 提取操作
         visitor = _ASTOpExtractor(self)
@@ -905,6 +1019,9 @@ class _ASTOpExtractor(ast.NodeVisitor):
                 module_name = node.func.value.id
                 if module_name in ("torch", "F"):
                     return self._process_module_call(module_name, method_name, node.args, node.keywords)
+                # 检查是否是 self.xxx(args) - 调用子模块
+                if module_name == "self":
+                    return self._process_submodule_call(method_name, node.args, node.keywords)
 
             # 否则是对象方法调用: x.pow(2), x.mean(...)
             obj = self.process_expr(node.func.value)
@@ -927,6 +1044,108 @@ class _ASTOpExtractor(ast.NodeVisitor):
             return output
 
         return self._new_var()
+
+    def _process_submodule_call(
+        self,
+        submodule: str,
+        args: List[ast.AST],
+        keywords: List[ast.keyword]
+    ) -> str:
+        """处理 self.xxx(args) 子模块调用，如 self.linear(x)"""
+        processed_args = [self.process_expr(arg) for arg in args]
+        kwargs = self._extract_kwargs(keywords)
+        output = self._new_var()
+
+        # 识别子模块类型
+        submodule_lower = submodule.lower()
+
+        # Linear 层: self.linear(x) -> matmul(x, weight) + bias
+        if "linear" in submodule_lower or submodule_lower in ("fc", "proj", "dense"):
+            input_tensor = processed_args[0] if processed_args else "input_0"
+            mm_output = f"{output}_mm"
+            self.ops.append(LowLevelOp(
+                op="matmul",
+                inputs=[input_tensor, "weight"],
+                output=mm_output,
+            ))
+            # 假设有 bias
+            self.ops.append(LowLevelOp(
+                op="add",
+                inputs=[mm_output, "bias"],
+                output=output,
+            ))
+            return output
+
+        # LayerNorm: self.layer_norm(x) -> 展开为低级操作
+        if "layernorm" in submodule_lower or "layer_norm" in submodule_lower or submodule_lower == "norm":
+            input_tensor = processed_args[0] if processed_args else "input_0"
+            # 简化: 直接作为 layer_norm 操作
+            self.ops.append(LowLevelOp(
+                op="layer_norm",
+                inputs=[input_tensor, "weight", "bias"],
+                output=output,
+                attrs=kwargs,
+            ))
+            return output
+
+        # RMSNorm: self.rms_norm(x)
+        if "rmsnorm" in submodule_lower or "rms_norm" in submodule_lower:
+            input_tensor = processed_args[0] if processed_args else "input_0"
+            # 展开 RMSNorm
+            eps = kwargs.get("eps", 1e-5)
+
+            # x^2
+            sq_output = f"{output}_sq"
+            self.ops.append(LowLevelOp(
+                op="mul",
+                inputs=[input_tensor, input_tensor],
+                output=sq_output,
+            ))
+            # mean(x^2)
+            mean_output = f"{output}_mean"
+            self.ops.append(LowLevelOp(
+                op="reduce_mean",
+                inputs=[sq_output],
+                output=mean_output,
+                attrs={"dim": -1, "keepdim": True},
+            ))
+            # mean + eps
+            add_eps_output = f"{output}_add_eps"
+            self.ops.append(LowLevelOp(
+                op="add",
+                inputs=[mean_output, f"const_{eps}"],
+                output=add_eps_output,
+            ))
+            # rsqrt(mean + eps)
+            rsqrt_output = f"{output}_rsqrt"
+            self.ops.append(LowLevelOp(
+                op="rsqrt",
+                inputs=[add_eps_output],
+                output=rsqrt_output,
+            ))
+            # x * rsqrt
+            norm_output = f"{output}_norm"
+            self.ops.append(LowLevelOp(
+                op="mul",
+                inputs=[input_tensor, rsqrt_output],
+                output=norm_output,
+            ))
+            # norm * weight
+            self.ops.append(LowLevelOp(
+                op="mul",
+                inputs=[norm_output, "weight"],
+                output=output,
+            ))
+            return output
+
+        # 其他子模块: 保持原样
+        self.ops.append(LowLevelOp(
+            op=submodule,
+            inputs=processed_args,
+            output=output,
+            attrs=kwargs,
+        ))
+        return output
 
     def _process_module_call(
         self,
@@ -1164,6 +1383,14 @@ def expand_subgraph_json(
     source = item.get("source", {})
     code = source.get("code", "")
 
+    # 检查代码是否是模块定义代码（无法展开）
+    if code:
+        code_stripped = code.strip()
+        # 模块定义代码，如 "self.linear = nn.Linear(...)"
+        if code_stripped.startswith("self.") and "nn." in code_stripped and "=" in code_stripped:
+            # 这是 __init__ 中的代码，直接从 ops 展开
+            return _expand_from_ops(item, expander)
+
     if not code:
         # 没有源代码，尝试从 ops 重建
         return _expand_from_ops(item, expander)
@@ -1185,6 +1412,12 @@ def expand_subgraph_json(
     try:
         expanded = expander.expand_from_code(
             code, input_shapes, weight_shapes, dtype)
+
+        # 检查展开结果是否有效
+        if not expanded.ops or expanded.metadata.get("expansion_method") in ("empty", "parse_failed"):
+            # 展开失败或为空，回退到 ops 展开
+            return _expand_from_ops(item, expander)
+
     except Exception as e:
         print(f"Expansion failed: {e}")
         return _expand_from_ops(item, expander)

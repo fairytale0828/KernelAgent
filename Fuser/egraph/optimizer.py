@@ -81,6 +81,7 @@ class SubgraphToEGraph:
         self.egraph = egraph
         self._node_to_eclass: Dict[str, int] = {}
         self._shape_info: Dict[int, ShapeInfo] = {}
+        self._inferred_shapes: Dict[str, List[int]] = {}  # 推断的形状缓存
 
     def convert(self, ir: SubgraphIR) -> Tuple[int, Dict[int, ShapeInfo]]:
         """
@@ -156,12 +157,21 @@ class SubgraphToEGraph:
             eclass_id = self.egraph.add(enode)
             self._node_to_eclass[node_id] = eclass_id
 
-            # 记录形状信息
+            # 记录形状信息 - 优先使用已知形状，否则推断
             if node.output_meta and node.output_meta.shape:
                 self._shape_info[eclass_id] = ShapeInfo(
                     shape=list(node.output_meta.shape),
                     dtype=node.output_meta.dtype.value if node.output_meta.dtype else "float32",
                 )
+            else:
+                # 尝试推断形状
+                inferred_shape = self._infer_shape(node, children)
+                if inferred_shape:
+                    self._shape_info[eclass_id] = ShapeInfo(
+                        shape=inferred_shape,
+                        dtype="float32",
+                    )
+                    self._inferred_shapes[node_id] = inferred_shape
 
         # 获取输出节点的 E-Class ID
         root_id = 0
@@ -177,6 +187,121 @@ class SubgraphToEGraph:
         """获取节点到 E-Class 的映射"""
         return self._node_to_eclass
 
+    def _infer_shape(self, node: OpNode, child_eclass_ids: List[int]) -> Optional[List[int]]:
+        """
+        推断操作节点的输出形状
+
+        Args:
+            node: 操作节点
+            child_eclass_ids: 子节点的 E-Class ID 列表
+
+        Returns:
+            推断的输出形状，如果无法推断则返回 None
+        """
+        op = node.op
+
+        # 获取子节点形状
+        child_shapes = []
+        for cid in child_eclass_ids:
+            if cid in self._shape_info:
+                child_shapes.append(self._shape_info[cid].shape)
+            else:
+                child_shapes.append(None)
+
+        # 根据操作类型推断形状
+        if op in ("add", "sub", "mul", "div", "max", "min"):
+            # 元素级操作：广播规则
+            return self._broadcast_shapes(child_shapes)
+
+        elif op == "matmul":
+            # 矩阵乘法: [M, K] @ [K, N] -> [M, N]
+            if len(child_shapes) >= 2 and child_shapes[0] and child_shapes[1]:
+                left, right = child_shapes[0], child_shapes[1]
+                if len(left) >= 1 and len(right) >= 1:
+                    # 处理批量维度
+                    if len(left) == 2 and len(right) == 2:
+                        return [left[0], right[1]]
+                    elif len(left) >= 2 and len(right) >= 2:
+                        # 批量 matmul
+                        batch_dims = left[:-2]
+                        return list(batch_dims) + [left[-2], right[-1]]
+            return None
+
+        elif op == "matmul_bias":
+            # matmul + bias: 与 matmul 相同
+            if len(child_shapes) >= 2 and child_shapes[0] and child_shapes[1]:
+                left, right = child_shapes[0], child_shapes[1]
+                if len(left) >= 2 and len(right) >= 2:
+                    return [left[0], right[1]]
+            return None
+
+        elif op in ("reduce_mean", "reduce_sum", "reduce_max", "reduce_min"):
+            # 归约操作
+            if child_shapes and child_shapes[0]:
+                shape = list(child_shapes[0])
+                attrs = dict(node.attrs_dict) if node.attrs_dict else {}
+                dim = attrs.get("dim", -1)
+                keepdim = attrs.get("keepdim", False)
+
+                if isinstance(dim, int):
+                    dim = dim % len(shape) if dim < 0 else dim
+                    if keepdim:
+                        shape[dim] = 1
+                    else:
+                        shape.pop(dim)
+                return shape
+            return None
+
+        elif op in ("rsqrt", "sqrt", "exp", "log", "neg", "abs", "relu", "gelu", "silu", "sigmoid"):
+            # 一元操作：保持形状
+            if child_shapes and child_shapes[0]:
+                return list(child_shapes[0])
+            return None
+
+        elif op == "transpose":
+            # 转置
+            if child_shapes and child_shapes[0]:
+                shape = list(child_shapes[0])
+                if len(shape) >= 2:
+                    shape[-1], shape[-2] = shape[-2], shape[-1]
+                return shape
+            return None
+
+        elif op == "softmax":
+            # softmax：保持形状
+            if child_shapes and child_shapes[0]:
+                return list(child_shapes[0])
+            return None
+
+        return None
+
+    def _broadcast_shapes(self, shapes: List[Optional[List[int]]]) -> Optional[List[int]]:
+        """计算广播后的形状"""
+        valid_shapes = [s for s in shapes if s is not None]
+        if not valid_shapes:
+            return None
+
+        # 找到最大维度数
+        max_dims = max(len(s) for s in valid_shapes)
+
+        # 对齐维度（左侧填充 1）
+        aligned = []
+        for s in valid_shapes:
+            aligned.append([1] * (max_dims - len(s)) + list(s))
+
+        # 计算广播结果
+        result = []
+        for i in range(max_dims):
+            dims = [s[i] for s in aligned]
+            max_dim = max(dims)
+            # 检查是否可广播
+            for d in dims:
+                if d != 1 and d != max_dim:
+                    return None  # 不可广播
+            result.append(max_dim)
+
+        return result
+
 
 # =============================================================================
 # E-Graph to Subgraph Converter
@@ -189,6 +314,10 @@ class EGraphToSubgraph:
         self.egraph = egraph
         self.original_ir = original_ir
         self._counter = 0
+        # 缓存：E-Class ID -> 节点 ID
+        self._eclass_to_node: Dict[int, str] = {}
+        # 缓存：权重名 -> 节点 ID
+        self._weight_cache: Dict[str, str] = {}
 
     def convert(
         self,
@@ -197,6 +326,11 @@ class EGraphToSubgraph:
     ) -> SubgraphIR:
         """转换提取的表达式为 SubgraphIR"""
         nodes: Dict[str, OpNode] = {}
+
+        # 重置缓存
+        self._eclass_to_node.clear()
+        self._weight_cache.clear()
+        self._counter = 0
 
         # 递归构建节点
         output_id = self._build_node(
@@ -224,12 +358,23 @@ class EGraphToSubgraph:
         choices: Dict[int, 'ENode'],
         nodes: Dict[str, OpNode]
     ) -> str:
-        """递归构建节点"""
-        enode = choices.get(eclass_id)
+        """
+        递归构建节点
+
+        使用缓存避免重复创建相同的节点
+        """
+        # 规范化 E-Class ID
+        canonical_id = self.egraph.find(eclass_id)
+
+        # 检查缓存
+        if canonical_id in self._eclass_to_node:
+            return self._eclass_to_node[canonical_id]
+
+        enode = choices.get(canonical_id)
 
         if enode is None:
             # 没有选择，尝试从 E-Class 获取
-            eclass = self.egraph.get_eclass(eclass_id)
+            eclass = self.egraph.get_eclass(canonical_id)
             if eclass and eclass.nodes:
                 enode = next(iter(eclass.nodes))
             else:
@@ -241,15 +386,20 @@ class EGraphToSubgraph:
                     children=(),
                     attrs=(),
                 )
+                self._eclass_to_node[canonical_id] = node_id
                 return node_id
 
-        # 检查是否是输入或权重
+        # 检查是否是输入
         if enode.op == "input":
+            input_name = "input_0"
             for attr in enode.attrs:
                 if attr[0] == "name":
-                    return attr[1]
-            return "input_0"
+                    input_name = attr[1]
+                    break
+            self._eclass_to_node[canonical_id] = input_name
+            return input_name
 
+        # 检查是否是权重
         if enode.op == "weight":
             weight_name = None
             for attr in enode.attrs:
@@ -259,51 +409,96 @@ class EGraphToSubgraph:
 
             # 如果权重名称看起来像数字（如 1e-05），创建一个常量节点
             if weight_name and (weight_name[0].isdigit() or weight_name.startswith('-')):
-                node_id = f"const_{self._counter}"
-                self._counter += 1
-                try:
-                    const_value = float(weight_name)
-                except ValueError:
-                    const_value = weight_name
-                nodes[node_id] = OpNode(
-                    op="const",
-                    children=(),
-                    attrs=(("value", const_value),),
-                )
+                # 常量也需要缓存
+                const_key = f"const:{weight_name}"
+                if const_key in self._weight_cache:
+                    node_id = self._weight_cache[const_key]
+                else:
+                    node_id = f"const_{self._counter}"
+                    self._counter += 1
+                    try:
+                        const_value = float(weight_name)
+                    except ValueError:
+                        const_value = weight_name
+                    nodes[node_id] = OpNode(
+                        op="const",
+                        children=(),
+                        attrs=(("value", const_value),),
+                    )
+                    self._weight_cache[const_key] = node_id
+                self._eclass_to_node[canonical_id] = node_id
                 return node_id
 
-            # 正常的权重 - 创建权重节点
-            node_id = f"w_{self._counter}"
-            self._counter += 1
-            nodes[node_id] = OpNode(
-                op="weight",
-                children=(),
-                attrs=(("name", weight_name),) if weight_name else (),
-            )
-            return node_id
+            # 正常的权重 - 使用原始权重名（如果有的话）
+            if weight_name:
+                # 检查是否在原始 IR 的权重中
+                if weight_name in self.original_ir.weights:
+                    # 直接使用原始权重名
+                    if weight_name not in nodes:
+                        nodes[weight_name] = OpNode(
+                            op="weight",
+                            children=(),
+                            attrs=(("name", weight_name),),
+                        )
+                    self._eclass_to_node[canonical_id] = weight_name
+                    return weight_name
 
+                # 检查缓存
+                if weight_name in self._weight_cache:
+                    node_id = self._weight_cache[weight_name]
+                    self._eclass_to_node[canonical_id] = node_id
+                    return node_id
+
+                # 创建新权重节点，但使用原始名称
+                nodes[weight_name] = OpNode(
+                    op="weight",
+                    children=(),
+                    attrs=(("name", weight_name),),
+                )
+                self._weight_cache[weight_name] = weight_name
+                self._eclass_to_node[canonical_id] = weight_name
+                return weight_name
+            else:
+                # 没有名称的权重
+                node_id = f"weight_{self._counter}"
+                self._counter += 1
+                nodes[node_id] = OpNode(
+                    op="weight",
+                    children=(),
+                    attrs=(),
+                )
+                self._eclass_to_node[canonical_id] = node_id
+                return node_id
+
+        # 检查是否是常量
         if enode.op == "const":
-            # 为常量创建节点
             const_value = None
             for attr in enode.attrs:
                 if attr[0] == "value":
                     const_value = attr[1]
                     break
 
-            node_id = f"const_{self._counter}"
-            self._counter += 1
-            nodes[node_id] = OpNode(
-                op="const",
-                children=(),
-                attrs=(("value", const_value),
-                       ) if const_value is not None else (),
-            )
+            # 常量缓存
+            const_key = f"const:{const_value}"
+            if const_key in self._weight_cache:
+                node_id = self._weight_cache[const_key]
+            else:
+                node_id = f"const_{self._counter}"
+                self._counter += 1
+                nodes[node_id] = OpNode(
+                    op="const",
+                    children=(),
+                    attrs=(("value", const_value),
+                           ) if const_value is not None else (),
+                )
+                self._weight_cache[const_key] = node_id
+
+            self._eclass_to_node[canonical_id] = node_id
             return node_id
 
         # 递归构建子节点
         children = []
         for child_id in enode.children:
-            # 确保使用规范的 E-Class ID
             canonical_child = self.egraph.find(child_id)
             child_name = self._build_node(canonical_child, choices, nodes)
             children.append(child_name)
@@ -318,6 +513,8 @@ class EGraphToSubgraph:
             attrs=enode.attrs,
         )
 
+        # 缓存
+        self._eclass_to_node[canonical_id] = node_id
         return node_id
 
 

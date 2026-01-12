@@ -60,7 +60,8 @@ from .optimizer import (
 from .rules.rule_library import (
     get_all_rules,
     get_rule_set,
-    RULE_SETS,
+    list_rule_sets,
+    RuleCategory,
 )
 
 __all__ = [
@@ -106,5 +107,6 @@ __all__ = [
     # Rule Library
     "get_all_rules",
     "get_rule_set",
-    "RULE_SETS",
+    "list_rule_sets",
+    "RuleCategory",
 ]

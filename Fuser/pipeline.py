@@ -130,9 +130,9 @@ def run_pipeline(
 
         try:
             # 使用新的通用优化器
-            from .egraph import AlgebraicOptimizer, OptimizerConfig, get_rule_set, RULE_SETS
+            from .egraph import AlgebraicOptimizer, OptimizerConfig, get_rule_set, list_rule_sets
 
-            print(f"  Available rule sets: {list(RULE_SETS.keys())}")
+            print(f"  Available rule sets: {list_rule_sets()}")
             print(f"  Using rule set: {rewrite_rule_set}")
 
             optimizer_config = OptimizerConfig(
@@ -301,7 +301,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     p.add_argument(
         "--rewrite-rule-set",
-        choices=["default", "full", "minimal"],
+        choices=["default", "full", "minimal", "attention"],
         default="default",
         help="Rule set for algebraic rewrite (default: G1-G4 enabled)"
     )
