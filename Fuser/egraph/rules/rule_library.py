@@ -299,6 +299,195 @@ EXTRA_RULES: List[RewriteRule] = [
         category=RuleCategory.FUSION,
         description="融合 matmul + bias + GELU",
     ),
+    RewriteRule(
+        name="matmul_silu_fusion",
+        pattern="silu(matmul(?x, ?w))",
+        rewrite="matmul_silu(?x, ?w)",
+        priority=15,
+        category=RuleCategory.FUSION,
+        description="融合 matmul 和 SiLU",
+    ),
+    RewriteRule(
+        name="matmul_bias_silu_fusion",
+        pattern="silu(add(matmul(?x, ?w), ?b))",
+        rewrite="matmul_bias_silu(?x, ?w, ?b)",
+        priority=25,
+        category=RuleCategory.FUSION,
+        description="融合 matmul + bias + SiLU",
+    ),
+
+    # ========== MatMul + Activation + Softmax 融合 ==========
+    RewriteRule(
+        name="matmul_gelu_softmax_fusion",
+        pattern="softmax(gelu(matmul(?x, ?w)))",
+        rewrite="matmul_gelu_softmax(?x, ?w)",
+        priority=30,
+        category=RuleCategory.FUSION,
+        description="融合 matmul + GELU + softmax",
+    ),
+    RewriteRule(
+        name="matmul_bias_gelu_softmax_fusion",
+        pattern="softmax(gelu(add(matmul(?x, ?w), ?b)))",
+        rewrite="matmul_bias_gelu_softmax(?x, ?w, ?b)",
+        priority=35,
+        category=RuleCategory.FUSION,
+        description="融合 matmul + bias + GELU + softmax",
+    ),
+    RewriteRule(
+        name="matmul_relu_softmax_fusion",
+        pattern="softmax(relu(matmul(?x, ?w)))",
+        rewrite="matmul_relu_softmax(?x, ?w)",
+        priority=30,
+        category=RuleCategory.FUSION,
+        description="融合 matmul + ReLU + softmax",
+    ),
+    RewriteRule(
+        name="matmul_bias_relu_softmax_fusion",
+        pattern="softmax(relu(add(matmul(?x, ?w), ?b)))",
+        rewrite="matmul_bias_relu_softmax(?x, ?w, ?b)",
+        priority=35,
+        category=RuleCategory.FUSION,
+        description="融合 matmul + bias + ReLU + softmax",
+    ),
+    RewriteRule(
+        name="linear_gelu_softmax_fusion",
+        pattern="softmax(gelu(matmul_bias(?x, ?w, ?b)))",
+        rewrite="linear_gelu_softmax(?x, ?w, ?b)",
+        priority=35,
+        category=RuleCategory.FUSION,
+        description="融合 linear + GELU + softmax",
+    ),
+
+    # ========== Online Softmax 规则 ==========
+    # Online Softmax 是一种单次遍历计算 softmax 的优化技术
+    RewriteRule(
+        name="softmax_to_online",
+        pattern="softmax(?x)",
+        rewrite="online_softmax(?x)",
+        priority=20,
+        category=RuleCategory.FUSION,
+        description="转换为 Online Softmax（单次遍历实现）",
+    ),
+    RewriteRule(
+        name="softmax_expanded_to_online",
+        pattern="div(exp(sub(?x, reduce_max(?x))), reduce_sum(exp(sub(?x, reduce_max(?x)))))",
+        rewrite="online_softmax(?x)",
+        priority=25,
+        category=RuleCategory.FUSION,
+        description="将展开的 softmax 转换为 Online Softmax",
+    ),
+    RewriteRule(
+        name="safe_softmax_to_online",
+        pattern="div(exp(sub(?x, ?max)), reduce_sum(exp(sub(?x, ?max))))",
+        rewrite="online_softmax(?x)",
+        priority=25,
+        category=RuleCategory.FUSION,
+        description="将数值稳定的 softmax 转换为 Online Softmax",
+    ),
+
+    # ========== Softmax + 后续操作融合 ==========
+    RewriteRule(
+        name="softmax_matmul_fusion",
+        pattern="matmul(softmax(?x), ?v)",
+        rewrite="softmax_matmul(?x, ?v)",
+        priority=25,
+        category=RuleCategory.FUSION,
+        description="融合 softmax 和后续 matmul（用于 Attention）",
+    ),
+    RewriteRule(
+        name="online_softmax_matmul_fusion",
+        pattern="matmul(online_softmax(?x), ?v)",
+        rewrite="online_softmax_matmul(?x, ?v)",
+        priority=30,
+        category=RuleCategory.FUSION,
+        description="融合 Online Softmax 和后续 matmul",
+    ),
+
+    # ========== GELU 分解和融合 ==========
+    RewriteRule(
+        name="gelu_expand_tanh",
+        pattern="gelu(?x)",
+        rewrite="mul(mul(?x, const_0.5), add(const_1, tanh(mul(mul(const_0.7978845608, add(?x, mul(const_0.044715, pow(?x, const_3)))), const_1))))",
+        category=RuleCategory.DECOMPOSE,
+        description="GELU 的 tanh 近似展开",
+    ),
+    RewriteRule(
+        name="gelu_expand_erf",
+        pattern="gelu(?x)",
+        rewrite="mul(mul(?x, const_0.5), add(const_1, erf(div(?x, const_1.4142135623))))",
+        category=RuleCategory.DECOMPOSE,
+        description="GELU 的精确 erf 展开",
+    ),
+
+    # ========== SiLU (Swish) 分解 ==========
+    RewriteRule(
+        name="silu_expand",
+        pattern="silu(?x)",
+        rewrite="mul(?x, sigmoid(?x))",
+        category=RuleCategory.DECOMPOSE,
+        description="SiLU 展开: silu(x) = x * sigmoid(x)",
+    ),
+    RewriteRule(
+        name="silu_fold",
+        pattern="mul(?x, sigmoid(?x))",
+        rewrite="silu(?x)",
+        priority=15,
+        category=RuleCategory.FUSION,
+        description="SiLU 折叠: x * sigmoid(x) = silu(x)",
+    ),
+
+    # ========== LayerNorm 规则 ==========
+    RewriteRule(
+        name="layernorm_expand",
+        pattern="layer_norm(?x, ?w, ?b, ?eps)",
+        rewrite="add(mul(div(sub(?x, reduce_mean(?x)), sqrt(add(reduce_var(?x), ?eps))), ?w), ?b)",
+        category=RuleCategory.DECOMPOSE,
+        description="展开 LayerNorm",
+    ),
+    RewriteRule(
+        name="layernorm_matmul_fusion",
+        pattern="matmul(layer_norm(?x, ?w, ?b, ?eps), ?wm)",
+        rewrite="layernorm_matmul(?x, ?w, ?b, ?eps, ?wm)",
+        priority=25,
+        category=RuleCategory.FUSION,
+        description="融合 LayerNorm 和 MatMul",
+    ),
+
+    # ========== Dropout 规则 ==========
+    RewriteRule(
+        name="dropout_inference",
+        pattern="dropout(?x, ?p)",
+        rewrite="?x",
+        priority=20,
+        category=RuleCategory.SIMPLIFY,
+        description="推理时 dropout 可以移除",
+    ),
+    RewriteRule(
+        name="dropout_matmul_fusion",
+        pattern="matmul(dropout(?x, ?p), ?w)",
+        rewrite="dropout_matmul(?x, ?p, ?w)",
+        priority=15,
+        category=RuleCategory.FUSION,
+        description="融合 dropout 和 matmul",
+    ),
+
+    # ========== 残差连接规则 ==========
+    RewriteRule(
+        name="residual_add_fusion",
+        pattern="add(?x, layer_norm(add(?x, ?y), ?w, ?b, ?eps))",
+        rewrite="residual_layernorm(?x, ?y, ?w, ?b, ?eps)",
+        priority=25,
+        category=RuleCategory.FUSION,
+        description="融合残差连接和 LayerNorm",
+    ),
+    RewriteRule(
+        name="residual_matmul_fusion",
+        pattern="add(?x, matmul(?x, ?w))",
+        rewrite="residual_matmul(?x, ?w)",
+        priority=20,
+        category=RuleCategory.FUSION,
+        description="融合残差连接和 MatMul",
+    ),
 
     # ========== 简化规则 ==========
     RewriteRule(
@@ -444,15 +633,61 @@ def _build_rule_sets() -> Dict[str, List[RewriteRule]]:
     # MatMul + Bias 融合规则（常用）
     matmul_bias_rules = [r for r in all_rules if "matmul_bias" in r.name]
 
+    # MatMul + Activation 融合规则
+    matmul_activation_rules = [r for r in all_rules if
+                               "matmul_gelu" in r.name or
+                               "matmul_relu" in r.name or
+                               "matmul_silu" in r.name or
+                               "linear_gelu" in r.name]
+
+    # Online Softmax 相关规则
+    online_softmax_rules = [r for r in all_rules if "online" in r.name.lower()]
+
+    # Softmax 融合规则
+    softmax_fusion_rules = [r for r in all_rules if
+                            "softmax" in r.name.lower() and
+                            r.category == RuleCategory.FUSION]
+
+    # GELU/SiLU 相关规则
+    activation_rules = [r for r in all_rules if
+                        "gelu" in r.name.lower() or
+                        "silu" in r.name.lower() or
+                        "relu" in r.name.lower()]
+
     return {
         "minimal": _deduplicate_rules(algebra_basic[:4]),
-        "default": _deduplicate_rules(algebra_basic + late_scaling + matmul_bias_rules + fusion_rules[:5]),
+        "default": _deduplicate_rules(
+            algebra_basic +
+            late_scaling +
+            matmul_bias_rules +
+            matmul_activation_rules +
+            softmax_fusion_rules[:5] +
+            fusion_rules[:5]
+        ),
         "full": all_rules,
         "fusion_only": _deduplicate_rules(fusion_rules),
         "late_scaling": _deduplicate_rules(late_scaling + algebra_basic[:4] + matmul_bias_rules),
         "rmsnorm": _deduplicate_rules(rmsnorm + late_scaling + algebra_basic[:4] + matmul_bias_rules),
-        "attention": _deduplicate_rules(attention + algebra_basic[:4]),
+        "attention": _deduplicate_rules(attention + algebra_basic[:4] + online_softmax_rules),
         "simplify": _deduplicate_rules(get_simplify_rules() + algebra_basic[:4]),
+        "online_softmax": _deduplicate_rules(
+            online_softmax_rules +
+            softmax_fusion_rules +
+            algebra_basic[:4]
+        ),
+        "activation_fusion": _deduplicate_rules(
+            activation_rules +
+            matmul_activation_rules +
+            matmul_bias_rules +
+            algebra_basic[:4]
+        ),
+        "mlp": _deduplicate_rules(
+            matmul_bias_rules +
+            matmul_activation_rules +
+            softmax_fusion_rules +
+            late_scaling +
+            algebra_basic[:4]
+        ),
     }
 
 

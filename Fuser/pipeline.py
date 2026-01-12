@@ -301,7 +301,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     p.add_argument(
         "--rewrite-rule-set",
-        choices=["default", "full", "minimal", "attention"],
+        choices=["default", "full", "minimal", "mlp"],
         default="default",
         help="Rule set for algebraic rewrite (default: G1-G4 enabled)"
     )

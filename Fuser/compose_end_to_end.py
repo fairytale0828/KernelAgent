@@ -310,10 +310,14 @@ def compose(
 
     last_usage = None
     last_code = None
+    last_raw_text = None
     verify_info: Dict[str, Any] = {}
 
     for i in range(1, max_iters + 1):
-        if i == 1 or last_code is None:
+        # If the previous attempt failed to produce a parseable fenced code
+        # block, force a refinement-style retry focused on output formatting.
+        has_parse_error = bool(verify_info.get("compose_parse_error"))
+        if i == 1 or (last_code is None and not has_parse_error):
             prompt = _build_composition_prompt(problem_code, subgraphs, kernels)
         else:
             # Build refinement using previous error info
@@ -342,7 +346,7 @@ def compose(
                 problem_code,
                 subgraphs,
                 kernels,
-                previous_code=last_code,
+                previous_code=last_code or "",
                 error_info={"stderr_tail": stderr_tail, "stdout_tail": stdout_tail},
             )
 
@@ -352,10 +356,25 @@ def compose(
         )
         last_usage = response.usage
         raw_text = response.content or ""
+        last_raw_text = raw_text
+        (attempts_dir / f"attempt_{i}.raw.txt").write_text(raw_text, encoding="utf-8")
 
         # Extract code
-        extracted = extract_single_python_file(raw_text)
-        code = extracted.code
+        try:
+            extracted = extract_single_python_file(raw_text)
+            code = extracted.code
+            verify_info.pop("compose_parse_error", None)
+        except ValueError as e:
+            err_path = attempts_dir / f"attempt_{i}.extract_error.txt"
+            err_path.write_text(str(e), encoding="utf-8")
+            verify_info["compose_parse_error"] = str(e)
+            verify_info["stderr_path"] = str(err_path)
+            verify_info.pop("stdout_path", None)
+            last_code = ""
+            if i < max_iters:
+                continue
+            raise
+
         # Auto-patch trivial Triton pitfalls before running
         code, changed = _auto_patch_common_triton_issues(code)
         (attempts_dir / f"attempt_{i}.py").write_text(code, encoding="utf-8")
@@ -381,7 +400,7 @@ def compose(
             if rr.passed:
                 break
         else:
-            # If not verifying, stop after first attempt
+            # If not verifying, stop after first successfully parsed attempt
             break
 
     # Write final composed file as the last attempt
