@@ -13,7 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-One-shot pipeline runner: extract → [algebraic rewrite] → dispatch → compose.
+One-shot pipeline runner: extract → [algebraic rewrite → aggregate] → dispatch → compose.
+
+Pipeline with --enable-algebraic-rewrite:
+1. Extract: 细粒度子图提取
+2. E-Graph: 代数优化，发现优化机会 (online_softmax, late_scaling 等)
+3. Aggregate: 识别融合模式，聚合子图，保留优化提示
+4. Dispatch: 根据聚合子图 + 优化提示生成融合 kernel
+5. Compose: 组装最终代码
 
 Usage:
   python -m Fuser.pipeline \
@@ -180,6 +187,74 @@ def run_pipeline(
             traceback.print_exc()
             print("  Continuing with original subgraphs...")
 
+    # Step 1.6: Aggregate (识别融合模式，聚合子图)
+    aggregate_stats = None
+    if enable_algebraic_rewrite:
+        print("\n" + "=" * 60)
+        print("Step 1.6: Aggregating subgraphs (pattern recognition)...")
+        print("=" * 60)
+
+        try:
+            from .egraph import SubgraphAggregator
+
+            aggregator = SubgraphAggregator()
+
+            # 读取当前子图
+            with open(subgraphs_path, 'r', encoding='utf-8') as f:
+                current_subgraphs = json.load(f)
+
+            # 执行聚合
+            aggregated_subgraphs, agg_stats = aggregator.aggregate(
+                current_subgraphs)
+
+            # 输出到新文件
+            aggregated_path = Path(run_dir) / "subgraphs_aggregated.json"
+            with open(aggregated_path, 'w', encoding='utf-8') as f:
+                json.dump(aggregated_subgraphs, f, indent=2)
+
+            print(f"✓ Aggregation completed:")
+            print(f"  Input subgraphs: {agg_stats['input_count']}")
+            print(f"  Output subgraphs: {agg_stats['output_count']}")
+            print(f"  Fusions applied: {agg_stats['fusions_applied']}")
+            print(
+                f"  Optimization hints preserved: {agg_stats.get('optimization_hints_preserved', 0)}")
+
+            if agg_stats.get("patterns_matched"):
+                print(f"  Fusion patterns matched:")
+                for pattern_name, count in agg_stats["patterns_matched"].items():
+                    print(f"    - {pattern_name}: {count}")
+
+            # 显示聚合后的子图类型
+            print(f"  Aggregated subgraph types:")
+            type_counts = {}
+            for sg in aggregated_subgraphs:
+                sg_type = sg.get("type", "unknown")
+                type_counts[sg_type] = type_counts.get(sg_type, 0) + 1
+            for sg_type, count in type_counts.items():
+                hints = ""
+                # 检查是否有 codegen_hints
+                for sg in aggregated_subgraphs:
+                    if sg.get("type") == sg_type and sg.get("codegen_hints"):
+                        hint_keys = list(sg["codegen_hints"].keys())[:3]
+                        hints = f" (hints: {hint_keys})"
+                        break
+                print(f"    - {sg_type}: {count}{hints}")
+
+            # 使用聚合后的文件
+            subgraphs_path = aggregated_path
+            aggregate_stats = agg_stats
+
+        except ImportError as e:
+            print(f"⚠ Aggregation not available: {e}")
+            import traceback
+            traceback.print_exc()
+            print("  Continuing without aggregation...")
+        except Exception as e:
+            print(f"⚠ Aggregation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            print("  Continuing with previous subgraphs...")
+
     # Step 2: dispatch to KernelAgent
     print("\n" + "=" * 60)
     print("Step 2: Dispatching to KernelAgent...")
@@ -239,6 +314,9 @@ def run_pipeline(
 
     if rewrite_stats:
         result["algebraic_rewrite"] = rewrite_stats
+
+    if aggregate_stats:
+        result["aggregate"] = aggregate_stats
 
     return result
 
@@ -301,7 +379,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     p.add_argument(
         "--rewrite-rule-set",
-        choices=["default", "full", "minimal", "mlp"],
+        choices=["default", "full", "minimal", "mlp", "attention"],
         default="default",
         help="Rule set for algebraic rewrite (default: G1-G4 enabled)"
     )

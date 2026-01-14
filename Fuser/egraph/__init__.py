@@ -63,6 +63,14 @@ from .rules.rule_library import (
     list_rule_sets,
     RuleCategory,
 )
+from .subgraph_aggregator import (
+    SubgraphAggregator,
+    FusionPattern,
+    OptimizationHintExtractor,
+    aggregate_subgraphs,
+    aggregate_json_file,
+    FUSION_PATTERNS,
+)
 
 __all__ = [
     # IR
@@ -109,4 +117,11 @@ __all__ = [
     "get_rule_set",
     "list_rule_sets",
     "RuleCategory",
+    # Subgraph Aggregator
+    "SubgraphAggregator",
+    "FusionPattern",
+    "OptimizationHintExtractor",
+    "aggregate_subgraphs",
+    "aggregate_json_file",
+    "FUSION_PATTERNS",
 ]
