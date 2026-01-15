@@ -70,8 +70,8 @@
     },
     "matmul": {
       "Triton.TileOnly.v1": {
-        "n": 14,
-        "mu_data": 0.1392857142857143
+        "n": 15,
+        "mu_data": 0.13
       },
       "Triton.TileVectorize.v1": {
         "n": 15,
@@ -82,20 +82,20 @@
         "mu_data": 0.5488235294117648
       },
       "Triton.SharedMemOpt.v1": {
-        "n": 14,
-        "mu_data": 0.9314285714285714
+        "n": 15,
+        "mu_data": 0.8693333333333333
       },
       "Triton.WarpOpt.v1": {
-        "n": 15,
-        "mu_data": 1.0993333333333335
+        "n": 17,
+        "mu_data": 0.9700000000000001
       },
       "Triton.CoalescedAccess.v1": {
         "n": 20,
         "mu_data": 1.1285
       },
       "Triton.TensorCore.v1": {
-        "n": 17,
-        "mu_data": 1.1823529411764706
+        "n": 18,
+        "mu_data": 1.1166666666666667
       },
       "Triton.AsyncCopy.v1": {
         "n": 21,
@@ -619,7 +619,7 @@
       "Triton.AsyncCopy.v1": 1.0
     }
   },
-  "global_iteration": 162,
+  "global_iteration": 167,
   "metadata": {
     "prior_weight": 5.0,
     "exploration_coef": 2.0

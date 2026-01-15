@@ -130,6 +130,7 @@ def run_pipeline(
 
     # Step 1.5: Algebraic Rewrite (optional)
     rewrite_stats = None
+    compute_graph_stats = None
     if enable_algebraic_rewrite:
         print("\n" + "=" * 60)
         print("Step 1.5: Algebraic Rewriting (E-Graph)...")
@@ -172,9 +173,45 @@ def run_pipeline(
                 for rule_name, count in stats["by_rule"].items():
                     print(f"    - {rule_name}: {count}")
 
-            # 使用重写后的文件
-            subgraphs_path = transformed_path
             rewrite_stats = stats
+            
+            # Step 1.5.1: 构建完整计算图变体
+            print("\n" + "=" * 60)
+            print("Step 1.5.1: Building Complete Compute Graphs...")
+            print("=" * 60)
+            
+            try:
+                from .compute_graph_builder import build_compute_graphs_from_file
+                
+                compute_graph_dir, cg_stats = build_compute_graphs_from_file(
+                    transformed_path,
+                    Path(run_dir),
+                    max_variants=rewrite_top_k,
+                )
+                
+                print(f"✓ Compute graphs built:")
+                print(f"  Input subgraphs: {cg_stats['total_input_subgraphs']}")
+                print(f"  Variant groups: {cg_stats['variant_groups']}")
+                print(f"  Generated combinations: {cg_stats['generated_combinations']}")
+                print(f"  Output directory: {compute_graph_dir}")
+                
+                if cg_stats.get("variant_group_details"):
+                    print(f"  Variant group details:")
+                    for base_id, count in cg_stats["variant_group_details"].items():
+                        print(f"    - {base_id}: {count} variants")
+                
+                compute_graph_stats = cg_stats
+                
+                # 不再使用 transformed_path，而是使用 compute_graph 目录
+                # 后续步骤需要适配
+                
+            except Exception as e:
+                print(f"⚠ Compute graph building failed: {e}")
+                import traceback
+                traceback.print_exc()
+                print("  Falling back to transformed subgraphs...")
+                # 回退到使用 transformed_path
+                subgraphs_path = transformed_path
 
         except ImportError as e:
             print(f"⚠ Algebraic rewrite not available: {e}")
@@ -189,59 +226,38 @@ def run_pipeline(
 
     # Step 1.6: Aggregate (识别融合模式，聚合子图)
     aggregate_stats = None
-    if enable_algebraic_rewrite:
+    if enable_algebraic_rewrite and compute_graph_stats:
         print("\n" + "=" * 60)
-        print("Step 1.6: Aggregating subgraphs (pattern recognition)...")
+        print("Step 1.6: Aggregating Compute Graphs (pattern recognition)...")
         print("=" * 60)
 
         try:
-            from .egraph import SubgraphAggregator
-
-            aggregator = SubgraphAggregator()
-
-            # 读取当前子图
-            with open(subgraphs_path, 'r', encoding='utf-8') as f:
-                current_subgraphs = json.load(f)
-
-            # 执行聚合
-            aggregated_subgraphs, agg_stats = aggregator.aggregate(
-                current_subgraphs)
-
-            # 输出到新文件
-            aggregated_path = Path(run_dir) / "subgraphs_aggregated.json"
-            with open(aggregated_path, 'w', encoding='utf-8') as f:
-                json.dump(aggregated_subgraphs, f, indent=2)
-
+            from .compute_graph_aggregator import aggregate_all_compute_graphs
+            
+            compute_graph_dir = Path(compute_graph_stats["output_dir"])
+            
+            # 对所有计算图进行聚合
+            aggregated_dir, agg_stats = aggregate_all_compute_graphs(
+                compute_graph_dir,
+                Path(run_dir),
+            )
+            
             print(f"✓ Aggregation completed:")
-            print(f"  Input subgraphs: {agg_stats['input_count']}")
-            print(f"  Output subgraphs: {agg_stats['output_count']}")
-            print(f"  Fusions applied: {agg_stats['fusions_applied']}")
-            print(
-                f"  Optimization hints preserved: {agg_stats.get('optimization_hints_preserved', 0)}")
-
-            if agg_stats.get("patterns_matched"):
-                print(f"  Fusion patterns matched:")
-                for pattern_name, count in agg_stats["patterns_matched"].items():
+            print(f"  Input compute graphs: {agg_stats['total_graphs']}")
+            print(f"  Aggregated graphs: {agg_stats['aggregated_count']}")
+            print(f"  Total fusions: {agg_stats['total_fusions']}")
+            
+            if agg_stats.get("fusion_patterns"):
+                print(f"  Fusion patterns found:")
+                for pattern_name, count in agg_stats["fusion_patterns"].items():
                     print(f"    - {pattern_name}: {count}")
-
-            # 显示聚合后的子图类型
-            print(f"  Aggregated subgraph types:")
-            type_counts = {}
-            for sg in aggregated_subgraphs:
-                sg_type = sg.get("type", "unknown")
-                type_counts[sg_type] = type_counts.get(sg_type, 0) + 1
-            for sg_type, count in type_counts.items():
-                hints = ""
-                # 检查是否有 codegen_hints
-                for sg in aggregated_subgraphs:
-                    if sg.get("type") == sg_type and sg.get("codegen_hints"):
-                        hint_keys = list(sg["codegen_hints"].keys())[:3]
-                        hints = f" (hints: {hint_keys})"
-                        break
-                print(f"    - {sg_type}: {count}{hints}")
-
-            # 使用聚合后的文件
-            subgraphs_path = aggregated_path
+            
+            # 选择最佳聚合结果作为后续使用
+            best_graph_path = aggregated_dir / "best_aggregated.json"
+            if best_graph_path.exists():
+                subgraphs_path = best_graph_path
+                print(f"  Using best aggregated graph: {best_graph_path}")
+            
             aggregate_stats = agg_stats
 
         except ImportError as e:
@@ -314,6 +330,9 @@ def run_pipeline(
 
     if rewrite_stats:
         result["algebraic_rewrite"] = rewrite_stats
+    
+    if compute_graph_stats:
+        result["compute_graphs"] = compute_graph_stats
 
     if aggregate_stats:
         result["aggregate"] = aggregate_stats
