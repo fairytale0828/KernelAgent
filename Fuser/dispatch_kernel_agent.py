@@ -252,6 +252,101 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     return "\n".join(lines) + "\n", params
 
 
+def _build_optimization_hints_section(codegen_hints: Dict[str, Any], fused_from: List[str]) -> str:
+    """构建优化提示部分"""
+    if not codegen_hints and not fused_from:
+        return ""
+    
+    hint_lines = []
+    
+    # 融合来源信息
+    if fused_from:
+        hint_lines.append(f"This subgraph is FUSED from: {fused_from}")
+        hint_lines.append("")
+    
+    if codegen_hints:
+        hint_lines.append("OPTIMIZATION HINTS (from algebraic analysis):")
+        hint_lines.append("These hints are derived from E-Graph equivalence analysis. Use them to guide your implementation.")
+        hint_lines.append("")
+        
+        # Flash Attention 提示
+        if codegen_hints.get("use_flash_attention"):
+            hint_lines.append("★ USE FLASH ATTENTION:")
+            hint_lines.append("  - This is a fused attention pattern: Q@K^T -> softmax -> @V")
+            hint_lines.append("  - Implement using a SINGLE fused kernel with online softmax")
+            hint_lines.append("  - Key optimizations: tiling, recomputation instead of storing attention matrix")
+            hint_lines.append("  - Memory complexity should be O(N) not O(N²)")
+            hint_lines.append("  - IMPORTANT: semantic inputs are Q, K, V (or a clearly packed QKV layout).")
+            hint_lines.append("  - If only one input tensor is provided, specify its layout and how Q/K/V are derived.")
+            hint_lines.append("  - Include/propagate scale (1/sqrt(D)) explicitly and do NOT double-scale.")
+            hint_lines.append("  - If causal/mask is required, include it; otherwise state mask=None.")
+            hint_lines.append("")
+        
+        # Online Softmax 提示
+        if codegen_hints.get("online_softmax"):
+            hint_lines.append("★ USE ONLINE SOFTMAX:")
+            hint_lines.append("  - Compute softmax in a single pass without materializing the full matrix")
+            hint_lines.append("  - Algorithm: track running max and sum, update incrementally per block")
+            hint_lines.append("  - Formula: softmax(x)_i = exp(x_i - max) / sum(exp(x - max))")
+            hint_lines.append("  - Update rule: new_max = max(old_max, block_max), rescale old_sum")
+            hint_lines.append("")
+        
+        # Late Scaling 提示
+        if codegen_hints.get("late_scaling"):
+            hint_lines.append("★ LATE SCALING OPTIMIZATION:")
+            hint_lines.append("  - Apply scaling factor AFTER matmul instead of before")
+            hint_lines.append("  - This reduces memory traffic: (X @ W) * s instead of (X * s) @ W")
+            hint_lines.append("  - Mathematically equivalent but more efficient")
+            hint_lines.append("")
+        
+        # MatMul + Bias 融合提示
+        if codegen_hints.get("matmul_bias_fused") or codegen_hints.get("fused_matmul_bias"):
+            hint_lines.append("★ MATMUL + BIAS FUSED:")
+            hint_lines.append("  - Fuse bias addition into the matmul epilogue")
+            hint_lines.append("  - Add bias while writing output tiles to avoid extra memory pass")
+            hint_lines.append("")
+        
+        # 激活函数融合提示
+        activation = codegen_hints.get("activation")
+        if activation:
+            hint_lines.append(f"★ FUSED ACTIVATION ({activation.upper()}):")
+            hint_lines.append(f"  - Fuse {activation} activation into the kernel epilogue")
+            hint_lines.append(f"  - Apply {activation} element-wise while writing output")
+            if activation == "gelu":
+                hint_lines.append("  - GELU(x) ≈ 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))")
+            elif activation == "silu":
+                hint_lines.append("  - SiLU(x) = x * sigmoid(x)")
+            hint_lines.append("")
+        
+        # MLP 融合提示
+        if codegen_hints.get("fused_mlp"):
+            hint_lines.append("★ FUSED MLP PATTERN:")
+            hint_lines.append("  - This is a fused MLP: Linear -> Activation -> Linear")
+            hint_lines.append("  - Consider fusing the first linear + activation into one kernel")
+            hint_lines.append("  - Then fuse the second linear separately or together if memory allows")
+            hint_lines.append("")
+        
+        # Tiling 提示
+        if codegen_hints.get("tiling"):
+            block_q = codegen_hints.get("block_size_q", 64)
+            block_kv = codegen_hints.get("block_size_kv", 64)
+            hint_lines.append(f"★ TILING CONFIGURATION:")
+            hint_lines.append(f"  - Suggested block sizes: Q={block_q}, KV={block_kv}")
+            hint_lines.append("  - Adjust based on your GPU's shared memory capacity")
+            hint_lines.append("")
+        
+        # 原始操作信息
+        original_ops = codegen_hints.get("original_ops")
+        if original_ops:
+            hint_lines.append("Original operations before fusion:")
+            hint_lines.append(f"  {json.dumps(original_ops)}")
+            hint_lines.append("")
+    
+    if len(hint_lines) > 0:
+        return "\n".join(hint_lines) + "\n"
+    return ""
+
+
 def _synthesize_problem_description(item: Dict[str, Any]) -> str:
     id_ = str(item.get("id", "unknown"))
     type_ = str(item.get("type", ""))
@@ -263,8 +358,15 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
     weights_fused = item.get("weights_fused")
     weights_orig = item.get("weights_original")
     source = item.get("source") or {}
+    
+    # 获取代码生成提示（来自 E-Graph 优化和聚合）
+    codegen_hints = item.get("codegen_hints") or {}
+    fused_from = item.get("fused_from") or []
 
     ref_code, _ = _build_reference_code(item)
+    
+    # 构建优化提示部分
+    optimization_hints = _build_optimization_hints_section(codegen_hints, fused_from)
 
     header = textwrap.dedent(
         f"""
@@ -283,7 +385,7 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
         Weights (fused): {json.dumps(weights_fused, indent=2) if isinstance(weights_fused, dict) else "null"}
         Weights (original): {json.dumps(weights_orig, indent=2) if isinstance(weights_orig, dict) else "null"}
 
-        Operations in order (with parameters):
+        {optimization_hints}Operations in order (with parameters):
         {json.dumps(item.get("ops", []), indent=2)}
 
         Requirements:
@@ -293,6 +395,7 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
         - Use {layout} layout and {dtype} dtype semantics.
         - The test will import kernel_function and compare to the reference implementation below.
         - You may use strictly equivalent algebraic rearrangements to reduce intermediates; if you do, add a brief comment explaining the equivalence.
+        - If OPTIMIZATION HINTS are provided above, USE THEM to guide your implementation for better performance.
 
         Test tolerance policy (enforced in generated tests):
         - Default tolerances: rtol=1e-3, atol=1e-3.

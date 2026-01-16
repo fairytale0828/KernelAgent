@@ -21,7 +21,7 @@ import hashlib
 import itertools
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Iterable
 
 
 @dataclass
@@ -186,26 +186,113 @@ class ComputeGraphBuilder:
         groups: Dict[str, VariantGroup],
         subgraphs: List[Dict[str, Any]],
     ) -> List[VariantGroup]:
-        """确定变体组的拓扑顺序"""
-        # 使用原始子图的顺序作为参考
-        base_id_order = []
-        seen = set()
+        """
+        确定变体组的拓扑顺序
+        
+        基于数据流依赖分析，而不仅仅是列表顺序
+        """
+        # 构建依赖图
+        # 每个子图的输出可能是另一个子图的输入
+        
+        # 首先收集每个 base_id 的输入输出信息
+        base_id_inputs: Dict[str, Set[str]] = {}  # base_id -> 输入依赖的 base_ids
+        base_id_outputs: Dict[str, str] = {}  # output_name -> base_id
         
         for sg in subgraphs:
-            base_id = self._extract_base_id(sg.get("id", ""))
-            if base_id not in seen:
-                seen.add(base_id)
-                base_id_order.append(base_id)
+            sg_id = sg.get("id", "")
+            base_id = self._extract_base_id(sg_id)
+            
+            if base_id not in base_id_inputs:
+                base_id_inputs[base_id] = set()
+            
+            # 分析输入依赖
+            inputs = sg.get("inputs", [])
+            ops = sg.get("ops", [])
+            
+            # 从 ops 中提取输入引用
+            for op in ops:
+                if isinstance(op, dict):
+                    op_inputs = op.get("inputs", [])
+                    for inp in op_inputs:
+                        if isinstance(inp, str):
+                            # 检查是否引用了其他子图的输出
+                            inp_base = self._extract_base_id(inp)
+                            if inp_base in groups and inp_base != base_id:
+                                base_id_inputs[base_id].add(inp_base)
+            
+            # 记录输出
+            output_id = sg.get("output_id") or sg_id
+            base_id_outputs[output_id] = base_id
+        
+        # 拓扑排序
+        ordered_base_ids = self._topological_sort(base_id_inputs, groups.keys())
+        
+        # 如果拓扑排序失败（有环或无法确定），回退到原始顺序
+        if not ordered_base_ids:
+            ordered_base_ids = []
+            seen = set()
+            for sg in subgraphs:
+                base_id = self._extract_base_id(sg.get("id", ""))
+                if base_id not in seen and base_id in groups:
+                    seen.add(base_id)
+                    ordered_base_ids.append(base_id)
         
         # 按顺序返回变体组
         ordered = []
-        for i, base_id in enumerate(base_id_order):
+        for i, base_id in enumerate(ordered_base_ids):
             if base_id in groups:
                 group = groups[base_id]
                 group.position = i
                 ordered.append(group)
         
         return ordered
+    
+    def _topological_sort(
+        self,
+        dependencies: Dict[str, Set[str]],
+        all_nodes: Iterable[str],
+    ) -> List[str]:
+        """
+        拓扑排序
+        
+        Args:
+            dependencies: 节点 -> 依赖的节点集合
+            all_nodes: 所有节点
+        
+        Returns:
+            排序后的节点列表，如果有环则返回空列表
+        """
+        all_nodes_set = set(all_nodes)
+        
+        # 计算入度
+        in_degree: Dict[str, int] = {node: 0 for node in all_nodes_set}
+        for node, deps in dependencies.items():
+            if node in all_nodes_set:
+                for dep in deps:
+                    if dep in all_nodes_set:
+                        in_degree[node] = in_degree.get(node, 0) + 1
+        
+        # Kahn's algorithm
+        queue = [node for node in all_nodes_set if in_degree.get(node, 0) == 0]
+        result = []
+        
+        while queue:
+            # 选择入度为 0 的节点
+            node = queue.pop(0)
+            result.append(node)
+            
+            # 更新依赖此节点的其他节点的入度
+            for other_node, deps in dependencies.items():
+                if other_node in all_nodes_set and node in deps:
+                    in_degree[other_node] -= 1
+                    if in_degree[other_node] == 0:
+                        queue.append(other_node)
+        
+        # 检查是否所有节点都被处理
+        if len(result) != len(all_nodes_set):
+            return []  # 有环
+        
+        return result
     
     def _generate_combinations(
         self,

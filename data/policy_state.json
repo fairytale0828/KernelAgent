@@ -14,24 +14,24 @@
         "mu_data": 0.0
       },
       "Triton.SharedMemOpt.v1": {
-        "n": 2,
-        "mu_data": 0.0
+        "n": 4,
+        "mu_data": 0.4825
       },
       "Triton.WarpOpt.v1": {
         "n": 2,
         "mu_data": 0.0
       },
       "Triton.CoalescedAccess.v1": {
-        "n": 5,
-        "mu_data": 0.0
+        "n": 7,
+        "mu_data": 0.27428571428571424
       },
       "Triton.TensorCore.v1": {
         "n": 3,
         "mu_data": 0.0
       },
       "Triton.AsyncCopy.v1": {
-        "n": 0,
-        "mu_data": 0.0
+        "n": 2,
+        "mu_data": 0.925
       }
     },
     "reduce": {
@@ -70,36 +70,36 @@
     },
     "matmul": {
       "Triton.TileOnly.v1": {
-        "n": 15,
-        "mu_data": 0.13
+        "n": 17,
+        "mu_data": 0.2388235294117647
       },
       "Triton.TileVectorize.v1": {
-        "n": 15,
-        "mu_data": 0.38800000000000007
+        "n": 17,
+        "mu_data": 0.4
       },
       "Triton.ReduceOpt.v1": {
         "n": 17,
         "mu_data": 0.5488235294117648
       },
       "Triton.SharedMemOpt.v1": {
-        "n": 15,
-        "mu_data": 0.8693333333333333
+        "n": 19,
+        "mu_data": 0.718421052631579
       },
       "Triton.WarpOpt.v1": {
-        "n": 17,
-        "mu_data": 0.9700000000000001
+        "n": 22,
+        "mu_data": 0.8136363636363636
       },
       "Triton.CoalescedAccess.v1": {
-        "n": 20,
-        "mu_data": 1.1285
+        "n": 28,
+        "mu_data": 0.8753571428571426
       },
       "Triton.TensorCore.v1": {
-        "n": 18,
-        "mu_data": 1.1166666666666667
+        "n": 26,
+        "mu_data": 0.9030769230769232
       },
       "Triton.AsyncCopy.v1": {
-        "n": 21,
-        "mu_data": 0.7419047619047621
+        "n": 23,
+        "mu_data": 0.6773913043478262
       }
     },
     "conv2d": {
@@ -619,7 +619,7 @@
       "Triton.AsyncCopy.v1": 1.0
     }
   },
-  "global_iteration": 167,
+  "global_iteration": 204,
   "metadata": {
     "prior_weight": 5.0,
     "exploration_coef": 2.0

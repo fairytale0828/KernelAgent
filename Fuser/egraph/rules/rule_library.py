@@ -386,14 +386,14 @@ EXTRA_RULES: List[RewriteRule] = [
     ),
 
     # ========== Softmax + 后续操作融合 ==========
-    RewriteRule(
-        name="softmax_matmul_fusion",
-        pattern="matmul(softmax(?x), ?v)",
-        rewrite="softmax_matmul(?x, ?v)",
-        priority=25,
-        category=RuleCategory.FUSION,
-        description="融合 softmax 和后续 matmul（用于 Attention）",
-    ),
+    # RewriteRule(
+    #     name="softmax_matmul_fusion",
+    #     pattern="matmul(softmax(?x), ?v)",
+    #     rewrite="softmax_matmul(?x, ?v)",
+    #     priority=25,
+    #     category=RuleCategory.FUSION,
+    #     description="融合 softmax 和后续 matmul（用于 Attention）",
+    # ),
     RewriteRule(
         name="online_softmax_matmul_fusion",
         pattern="matmul(online_softmax(?x), ?v)",
