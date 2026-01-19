@@ -352,6 +352,9 @@ def compose(
         )
         last_usage = response.usage
         raw_text = response.content or ""
+        (attempts_dir / f"attempt_{i}.response.txt").write_text(
+            raw_text, encoding="utf-8"
+        )
 
         # Extract code
         extracted = extract_single_python_file(raw_text)
