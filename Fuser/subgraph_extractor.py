@@ -85,7 +85,7 @@ def _extract_json_block(text: str) -> str:
     start = text.find("[")
     end = text.rfind("]")
     if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
+        return text[start: end + 1]
     return ""
 
 
@@ -114,7 +114,8 @@ def _dedup_by_shape_signature(items: list[dict[str, Any]]) -> list[dict[str, Any
                 else:
                     dims = [str(shape)] if shape is not None else []
                 normed.append(
-                    {"dims": dims, "dtype": str(dtype) if dtype else None, "k": kind}
+                    {"dims": dims, "dtype": str(
+                        dtype) if dtype else None, "k": kind}
                 )
             else:
                 normed.append(str(e))
@@ -353,7 +354,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--problem", required=True, help="Absolute path to KernelBench problem file"
     )
-    p.add_argument("--model", default="gpt-5", help="OpenAI model name (Responses API)")
+    p.add_argument("--model", default="gpt-5",
+                   help="OpenAI model name (Responses API)")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--max-iters", type=int, default=5)
     p.add_argument("--llm-timeout-s", type=int, default=2400)

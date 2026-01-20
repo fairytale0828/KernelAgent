@@ -78,24 +78,24 @@
         "mu_data": 0.4
       },
       "Triton.ReduceOpt.v1": {
-        "n": 17,
-        "mu_data": 0.5488235294117648
+        "n": 21,
+        "mu_data": 0.471904761904762
       },
       "Triton.SharedMemOpt.v1": {
-        "n": 19,
-        "mu_data": 0.718421052631579
+        "n": 23,
+        "mu_data": 0.5934782608695652
       },
       "Triton.WarpOpt.v1": {
-        "n": 22,
-        "mu_data": 0.8136363636363636
+        "n": 26,
+        "mu_data": 0.6884615384615383
       },
       "Triton.CoalescedAccess.v1": {
-        "n": 28,
-        "mu_data": 0.8753571428571426
+        "n": 31,
+        "mu_data": 0.7906451612903225
       },
       "Triton.TensorCore.v1": {
-        "n": 26,
-        "mu_data": 0.9030769230769232
+        "n": 30,
+        "mu_data": 0.7826666666666668
       },
       "Triton.AsyncCopy.v1": {
         "n": 23,
@@ -619,7 +619,7 @@
       "Triton.AsyncCopy.v1": 1.0
     }
   },
-  "global_iteration": 204,
+  "global_iteration": 223,
   "metadata": {
     "prior_weight": 5.0,
     "exploration_coef": 2.0

@@ -174,37 +174,39 @@ def run_pipeline(
                     print(f"    - {rule_name}: {count}")
 
             rewrite_stats = stats
-            
+
             # Step 1.5.1: 构建完整计算图变体
             print("\n" + "=" * 60)
             print("Step 1.5.1: Building Complete Compute Graphs...")
             print("=" * 60)
-            
+
             try:
                 from .compute_graph_builder import build_compute_graphs_from_file
-                
+
                 compute_graph_dir, cg_stats = build_compute_graphs_from_file(
                     transformed_path,
                     Path(run_dir),
                     max_variants=rewrite_top_k,
                 )
-                
+
                 print(f"✓ Compute graphs built:")
-                print(f"  Input subgraphs: {cg_stats['total_input_subgraphs']}")
+                print(
+                    f"  Input subgraphs: {cg_stats['total_input_subgraphs']}")
                 print(f"  Variant groups: {cg_stats['variant_groups']}")
-                print(f"  Generated combinations: {cg_stats['generated_combinations']}")
+                print(
+                    f"  Generated combinations: {cg_stats['generated_combinations']}")
                 print(f"  Output directory: {compute_graph_dir}")
-                
+
                 if cg_stats.get("variant_group_details"):
                     print(f"  Variant group details:")
                     for base_id, count in cg_stats["variant_group_details"].items():
                         print(f"    - {base_id}: {count} variants")
-                
+
                 compute_graph_stats = cg_stats
-                
+
                 # 不再使用 transformed_path，而是使用 compute_graph 目录
                 # 后续步骤需要适配
-                
+
             except Exception as e:
                 print(f"⚠ Compute graph building failed: {e}")
                 import traceback
@@ -233,31 +235,31 @@ def run_pipeline(
 
         try:
             from .compute_graph_aggregator import aggregate_all_compute_graphs
-            
+
             compute_graph_dir = Path(compute_graph_stats["output_dir"])
-            
+
             # 对所有计算图进行聚合
             aggregated_dir, agg_stats = aggregate_all_compute_graphs(
                 compute_graph_dir,
                 Path(run_dir),
             )
-            
+
             print(f"✓ Aggregation completed:")
             print(f"  Input compute graphs: {agg_stats['total_graphs']}")
             print(f"  Aggregated graphs: {agg_stats['aggregated_count']}")
             print(f"  Total fusions: {agg_stats['total_fusions']}")
-            
+
             if agg_stats.get("fusion_patterns"):
                 print(f"  Fusion patterns found:")
                 for pattern_name, count in agg_stats["fusion_patterns"].items():
                     print(f"    - {pattern_name}: {count}")
-            
+
             # 选择最佳聚合结果作为后续使用
             best_graph_path = aggregated_dir / "best_aggregated.json"
             if best_graph_path.exists():
                 subgraphs_path = best_graph_path
                 print(f"  Using best aggregated graph: {best_graph_path}")
-            
+
             aggregate_stats = agg_stats
 
         except ImportError as e:
@@ -330,7 +332,7 @@ def run_pipeline(
 
     if rewrite_stats:
         result["algebraic_rewrite"] = rewrite_stats
-    
+
     if compute_graph_stats:
         result["compute_graphs"] = compute_graph_stats
 
