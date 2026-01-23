@@ -21,6 +21,8 @@ from .base import BaseProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
 from .deepseek_provider import DeepSeekProvider
+from .gemini_provider import GeminiProvider
+from .qwen_provider import QwenProvider
 from .relay_provider import RelayProvider
 
 
@@ -83,6 +85,28 @@ AVAILABLE_MODELS = [
         provider_class=DeepSeekProvider,
         description="DeepSeek Coder - 代码生成专用模型",
     ),
+    # Gemini Models (OpenAI-compatible endpoint)
+    ModelConfig(
+        name="ge2.5-flash",
+        provider_class=GeminiProvider,
+        description="ge2.5-flash",
+    ),
+    ModelConfig(
+        name="ge2.5-pro",
+        provider_class=GeminiProvider,
+        description="ge2.5-pro",
+    ),
+    # Qwen Models (OpenAI-compatible endpoint)
+    ModelConfig(
+        name="qwen-plus",
+        provider_class=QwenProvider,
+        description="Qwen Plus",
+    ),
+    ModelConfig(
+        name="qwen3-coder-plus",
+        provider_class=QwenProvider,
+        description="Qwen Coder Plus",
+    )
 ]
 
 # Create lookup dictionaries

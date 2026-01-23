@@ -18,6 +18,8 @@ from .base import BaseProvider, LLMResponse
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
 from .deepseek_provider import DeepSeekProvider
+from .gemini_provider import GeminiProvider
+from .qwen_provider import QwenProvider
 from .models import get_model_provider, AVAILABLE_MODELS, is_model_available
 
 __all__ = [
@@ -26,6 +28,8 @@ __all__ = [
     "OpenAIProvider",
     "AnthropicProvider",
     "DeepSeekProvider",
+    "GeminiProvider",
+    "QwenProvider",
     "get_model_provider",
     "AVAILABLE_MODELS",
     "is_model_available",

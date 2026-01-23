@@ -14,24 +14,24 @@
         "mu_data": 0.0
       },
       "Triton.SharedMemOpt.v1": {
-        "n": 4,
-        "mu_data": 0.4825
+        "n": 2,
+        "mu_data": 0.0
       },
       "Triton.WarpOpt.v1": {
         "n": 2,
         "mu_data": 0.0
       },
       "Triton.CoalescedAccess.v1": {
-        "n": 7,
-        "mu_data": 0.27428571428571424
+        "n": 5,
+        "mu_data": 0.0
       },
       "Triton.TensorCore.v1": {
         "n": 3,
         "mu_data": 0.0
       },
       "Triton.AsyncCopy.v1": {
-        "n": 2,
-        "mu_data": 0.925
+        "n": 0,
+        "mu_data": 0.0
       }
     },
     "reduce": {
@@ -70,36 +70,36 @@
     },
     "matmul": {
       "Triton.TileOnly.v1": {
-        "n": 17,
-        "mu_data": 0.2388235294117647
+        "n": 20,
+        "mu_data": 0.10900000000000001
       },
       "Triton.TileVectorize.v1": {
-        "n": 17,
-        "mu_data": 0.4
+        "n": 19,
+        "mu_data": 0.3063157894736842
       },
       "Triton.ReduceOpt.v1": {
-        "n": 21,
-        "mu_data": 0.471904761904762
+        "n": 17,
+        "mu_data": 0.5488235294117648
       },
       "Triton.SharedMemOpt.v1": {
-        "n": 23,
-        "mu_data": 0.5934782608695652
+        "n": 21,
+        "mu_data": 0.6552380952380952
       },
       "Triton.WarpOpt.v1": {
         "n": 26,
-        "mu_data": 0.6884615384615383
+        "mu_data": 0.8376923076923078
       },
       "Triton.CoalescedAccess.v1": {
-        "n": 31,
-        "mu_data": 0.7906451612903225
+        "n": 29,
+        "mu_data": 0.9799999999999999
       },
       "Triton.TensorCore.v1": {
-        "n": 30,
-        "mu_data": 0.7826666666666668
+        "n": 26,
+        "mu_data": 0.823076923076923
       },
       "Triton.AsyncCopy.v1": {
         "n": 23,
-        "mu_data": 0.6773913043478262
+        "mu_data": 0.7021739130434784
       }
     },
     "conv2d": {
@@ -619,7 +619,7 @@
       "Triton.AsyncCopy.v1": 1.0
     }
   },
-  "global_iteration": 223,
+  "global_iteration": 210,
   "metadata": {
     "prior_weight": 5.0,
     "exploration_coef": 2.0

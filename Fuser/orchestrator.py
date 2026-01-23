@@ -47,7 +47,11 @@ def _worker_process_main(
     from .worker import Worker as _Worker
 
     # Load environment variables in worker process
-    load_dotenv()
+    env_path = _P(__file__).resolve().parents[1] / ".env"
+    if env_path.is_file():
+        load_dotenv(dotenv_path=env_path)
+    else:
+        load_dotenv()
 
     # Rehydrate dataclass (Path fields from str)
     wcfg = _WC(

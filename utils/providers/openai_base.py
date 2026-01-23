@@ -43,6 +43,14 @@ class OpenAICompatibleProvider(BaseProvider):
             return
 
         api_key = self._get_api_key(self.api_key_env)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "[OpenAICompatibleProvider] init %s base_url=%s api_key=%s",
+            self.api_key_env,
+            self.base_url or "default",
+            "set" if api_key else "missing",
+        )
         if api_key:
             # Configure proxy using centralized utility function
             self._original_proxy_env = configure_proxy_environment()

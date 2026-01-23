@@ -61,6 +61,10 @@ OPENAI_API_KEY=sk-...
 # Anthropic (default; `claude-sonnet-4-20250514` is used when `OPENAI_MODEL` is unset)
 ANTHROPIC_API_KEY=sk-ant-...
 
+# Gemini (OpenAI-compatible endpoint)
+GEMINI_API_KEY=sk-...
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+
 # Relay configuration for self-hosted gateways
 LLM_RELAY_URL=http://127.0.0.1:11434
 LLM_RELAY_TIMEOUT_S=120

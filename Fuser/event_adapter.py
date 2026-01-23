@@ -76,13 +76,18 @@ class EventAdapter:
         
         # Try to use our provider system first
         import logging
+        import os
         logger = logging.getLogger(__name__)
         
         if get_model_provider is not None:
             try:
                 logger.info(f"[EventAdapter] Attempting to get provider for model: {self.model}")
                 provider = get_model_provider(self.model)
-                logger.info(f"[EventAdapter] Provider obtained: {provider}")
+                logger.info(
+                    "[EventAdapter] Provider obtained: %s (name=%s)",
+                    provider,
+                    getattr(provider, "name", "unknown"),
+                )
                 if provider and provider.is_available():
                     logger.info(f"[EventAdapter] Provider is available, using provider system")
                     self._client = provider
@@ -103,7 +108,14 @@ class EventAdapter:
             )
         
         # Try to configure OpenAI client with DeepSeek API if available
-        import os
+        logger.warning(
+            "[EventAdapter] Falling back to OpenAI SDK. Env presence: "
+            "GEMINI_API_KEY=%s GEMINI_BASE_URL=%s OPENAI_API_KEY=%s DEEPSEEK_API_KEY=%s",
+            "set" if os.getenv("GEMINI_API_KEY") else "missing",
+            "set" if os.getenv("GEMINI_BASE_URL") else "missing",
+            "set" if os.getenv("OPENAI_API_KEY") else "missing",
+            "set" if os.getenv("DEEPSEEK_API_KEY") else "missing",
+        )
         deepseek_key = os.getenv("DEEPSEEK_API_KEY")
         if deepseek_key:
             self._client = OpenAI(
@@ -179,6 +191,15 @@ class EventAdapter:
         self._append_event(
             StreamDelta(start_ts, "stream_started", {"model": self.model})
         )
+        client_info: dict[str, Any] = {}
+        if hasattr(client, "get_response") and hasattr(client, "name"):
+            client_info["client_type"] = "provider"
+            client_info["provider_name"] = getattr(client, "name", "unknown")
+            client_info["base_url"] = getattr(client, "base_url", None)
+        else:
+            client_info["client_type"] = "openai_sdk"
+            client_info["base_url"] = getattr(client, "base_url", None)
+        self._append_event(StreamDelta(time.time(), "client_info", client_info))
 
         try:
             # Check if client is our provider system
