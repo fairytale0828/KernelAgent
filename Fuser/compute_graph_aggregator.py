@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# Licensed under the Apache License, Version 2.0
 """
 计算图聚合器
 

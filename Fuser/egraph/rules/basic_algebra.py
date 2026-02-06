@@ -1,5 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# Licensed under the Apache License, Version 2.0
 """
 G1: 基础代数规则
 

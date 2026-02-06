@@ -450,7 +450,7 @@ def run(
         # KernelAgent调用参数
         # Pin KernelAgent concurrency defaults: 4 workers, 10 rounds
         local_agent = TritonKernelAgent(
-            num_workers=3, max_rounds=10, model_name=agent_model
+            num_workers=3, max_rounds=20, model_name=agent_model
         )
         try:
             result = local_agent.generate_kernel(

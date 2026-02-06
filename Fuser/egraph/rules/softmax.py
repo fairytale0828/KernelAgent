@@ -1,5 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# Licensed under the Apache License, Version 2.0
 """
 G5: Softmax 定义展开/折叠规则
 

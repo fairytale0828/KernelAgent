@@ -1,5 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# Licensed under the Apache License, Version 2.0
 """
 G3: 归约线性规则
 

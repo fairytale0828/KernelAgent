@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 from dotenv import load_dotenv
 
@@ -31,6 +31,67 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
         handlers=[logging.StreamHandler()]
     )
     return logging.getLogger(__name__)
+
+
+def parse_problem_ids(value: str) -> List[int]:
+    """Parse problem_id string into a list of ints (e.g., '3' or '1-100')."""
+    value = value.strip()
+    if "-" in value:
+        parts = value.split("-")
+        if len(parts) != 2:
+            raise argparse.ArgumentTypeError("problem_id区间格式应为: start-end")
+        start_str, end_str = parts
+        if not start_str.isdigit() or not end_str.isdigit():
+            raise argparse.ArgumentTypeError("problem_id区间必须是整数")
+        start = int(start_str)
+        end = int(end_str)
+        if start <= 0 or end <= 0:
+            raise argparse.ArgumentTypeError("problem_id必须为正整数")
+        if start > end:
+            raise argparse.ArgumentTypeError("problem_id区间起始值不能大于结束值")
+        return list(range(start, end + 1))
+    if not value.isdigit():
+        raise argparse.ArgumentTypeError("problem_id必须为整数或区间(如 1-100)")
+    return [int(value)]
+
+
+def _coerce_speedup(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().rstrip("x"))
+        except ValueError:
+            return None
+    return None
+
+
+def extract_best_speedup(result: Dict[str, Any]) -> float:
+    """Best-effort extraction of speedup from result/details."""
+    direct = _coerce_speedup(result.get("speedup"))
+    if direct is not None:
+        return direct
+
+    details = result.get("details")
+    if not isinstance(details, (dict, list)):
+        return 0.0
+
+    best = 0.0
+    stack: List[Any] = [details]
+    keys = {"speedup", "best_speedup"}
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for k, v in current.items():
+                if k in keys:
+                    val = _coerce_speedup(v)
+                    if val is not None and val > best:
+                        best = val
+                else:
+                    stack.append(v)
+        elif isinstance(current, list):
+            stack.extend(current)
+    return best
 
 
 def create_problem_file(problem_info: Dict[str, Any], output_dir: Path) -> Path:
@@ -200,7 +261,12 @@ def main():
     
     # 基本参数
     parser.add_argument("--level", type=int, required=True, help="KernelBench问题级别 (1-4)")
-    parser.add_argument("--problem_id", type=int, required=True, help="问题ID")
+    parser.add_argument(
+        "--problem_id",
+        type=parse_problem_ids,
+        required=True,
+        help="问题ID，支持单个ID或区间(如 3 或 1-100)",
+    )
     parser.add_argument("--output_dir", type=str, default="./kernel_outputs", 
                        help="输出目录 (默认: ./kernel_outputs)")
     
@@ -241,53 +307,80 @@ def main():
         return 1
     
     try:
-        # 获取问题信息
-        try:
-            problem_info = loader.get_problem(args.level, args.problem_id)
-            logger.info(f"加载问题: Level {args.level} Problem {args.problem_id} - {problem_info['operation_name']}")
-            logger.info(f"描述: {problem_info['description']}")
-        except ValueError as e:
-            logger.error(str(e))
-            return 1
-        
         # 创建输出目录
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 生成内核
-        result = None
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            if args.method == "direct":
-                result = generate_kernel_direct(problem_info, args, logger)
-            elif args.method == "auto":
-                result = generate_kernel_auto_router(problem_info, args, logger, temp_path)
-        
-        # 保存结果
-        if result:
-            save_results(result, output_dir, problem_info)
-            
-            # 打印结果摘要
-            print("\n" + "=" * 60)
-            print("生成结果摘要")
-            print("=" * 60)
-            print(f"问题: Level {args.level} Problem {args.problem_id} - {problem_info['operation_name']}")
-            print(f"方法: {result.get('method', 'unknown')}")
-            if 'route' in result:
-                print(f"路由: {result['route']}")
-            print(f"成功: {'✓' if result['success'] else '✗'}")
-            print(f"耗时: {result.get('generation_time', 0):.2f}s")
-            
-            if result['success']:
-                print("✓ 内核生成成功！")
-                return 0
+
+        problem_ids = args.problem_id
+        any_failed = False
+        total_count = len(problem_ids)
+        success_count = 0
+
+        for pid in problem_ids:
+            # 获取问题信息
+            try:
+                problem_info = loader.get_problem(args.level, pid)
+                logger.info(
+                    "加载问题: Level %s Problem %s - %s",
+                    args.level,
+                    pid,
+                    problem_info["operation_name"],
+                )
+                logger.info("描述: %s", problem_info["description"])
+            except ValueError as e:
+                logger.error(str(e))
+                any_failed = True
+                continue
+
+            # 生成内核
+            result = None
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+
+                if args.method == "direct":
+                    result = generate_kernel_direct(problem_info, args, logger)
+                elif args.method == "auto":
+                    result = generate_kernel_auto_router(problem_info, args, logger, temp_path)
+
+            # 保存结果
+            if result:
+                save_results(result, output_dir, problem_info)
+
+                speedup = extract_best_speedup(result) if result.get("success") else 0.0
+                status = "Success" if result.get("success") else "Fail"
+                print(f"Kernel {pid} generate {status}, speedup = {speedup:.3f}")
+
+                # 打印结果摘要
+                print("\n" + "=" * 60)
+                print("生成结果摘要")
+                print("=" * 60)
+                print(
+                    f"问题: Level {args.level} Problem {pid} - {problem_info['operation_name']}"
+                )
+                print(f"方法: {result.get('method', 'unknown')}")
+                if "route" in result:
+                    print(f"路由: {result['route']}")
+                print(f"成功: {'✓' if result['success'] else '✗'}")
+                print(f"耗时: {result.get('generation_time', 0):.2f}s")
+
+                if result["success"]:
+                    print("✓ 内核生成成功！")
+                    success_count += 1
+                else:
+                    print("✗ 内核生成失败")
+                    any_failed = True
             else:
-                print("✗ 内核生成失败")
-                return 1
-        else:
-            logger.error("生成过程中发生未知错误")
-            return 1
+                logger.error("生成过程中发生未知错误")
+                any_failed = True
+
+        if total_count > 1:
+            success_rate = success_count / total_count if total_count else 0.0
+            print(
+                f"Total: {total_count}, Success: {success_count}, "
+                f"Success rate: {success_rate:.2%}"
+            )
+
+        return 1 if any_failed else 0
             
     except KeyboardInterrupt:
         logger.info("用户中断操作")

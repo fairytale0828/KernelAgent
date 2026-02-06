@@ -106,6 +106,26 @@ AVAILABLE_MODELS = [
         name="qwen3-coder-plus",
         provider_class=QwenProvider,
         description="Qwen Coder Plus",
+    ),
+    ModelConfig(
+        name="glm-4.7",
+        provider_class=QwenProvider,
+        description="glm-4.7",
+    ),
+    ModelConfig(
+        name="kimi-k2-thinking",
+        provider_class=QwenProvider,
+        description="Kimi K2 Thinking Model",
+    ),
+    ModelConfig(
+        name="Moonshot-Kimi-K2-Instruct",
+        provider_class=QwenProvider,
+        description="Moonshot Kimi K2 Instruct Model",
+    ),
+    ModelConfig(
+        name="deepseek-v3.2",
+        provider_class=QwenProvider,
+        description="deepseek-v3.2 Model",
     )
 ]
 

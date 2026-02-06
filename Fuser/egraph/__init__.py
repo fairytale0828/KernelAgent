@@ -1,5 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# Licensed under the Apache License, Version 2.0
 """
 E-Graph Algebraic Rewriting Engine for Fuser.
 
